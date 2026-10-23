@@ -21,6 +21,7 @@
 			</a>
 			<nav class="tabs" id="tabs" role="tablist" aria-label="Sections" hidden>
 				<button class="tab" role="tab" data-tab="main" aria-selected="true">Dashboard</button>
+				<button class="tab" role="tab" data-tab="games" aria-selected="false">Games</button>
 				<button class="tab" role="tab" data-tab="inventory" aria-selected="false">Inventory</button>
 				<button class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
 			</nav>
@@ -79,6 +80,46 @@
 			</div>
 		</section>
 
+		<section id="tab-games" class="tab-panel" role="tabpanel" hidden>
+			<div class="game-search">
+				<label class="sr-only" for="game-input">Add a game to watch</label>
+				<div class="combo" id="game-combo">
+					<svg class="combo-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+					<input id="game-input" type="text" role="combobox" autocomplete="off" spellcheck="false"
+						aria-autocomplete="list" aria-expanded="false" aria-controls="game-suggestions"
+						placeholder="Search games with campaigns, or type any game name">
+					<ul class="suggestions" id="game-suggestions" role="listbox" aria-label="Suggested games" hidden></ul>
+				</div>
+			</div>
+			<div class="games-layout">
+				<article class="panel">
+					<div class="panel-head">
+						<h2>Watch list</h2>
+						<span class="muted small" id="watch-count"></span>
+					</div>
+					<p class="hint">Mined from top to bottom. Drag a game to change its priority.</p>
+					<ol class="game-list" id="games" aria-describedby="drag-help"></ol>
+					<p class="sr-only" id="drag-help">Focus a drag handle and press the up or down arrow key to move the game.</p>
+					<label class="toggle">
+						<input type="checkbox" id="priority-only">
+						<span class="toggle-track"></span>
+						<span class="toggle-label">
+							Only mine games on this list
+							<small>When off, other eligible games are mined after the listed ones run out.</small>
+						</span>
+					</label>
+				</article>
+				<article class="panel">
+					<div class="panel-head">
+						<h2>Games with campaigns</h2>
+						<button class="btn-ghost small-btn" id="games-add-all" type="button">Add all</button>
+					</div>
+					<p class="hint" id="available-hint">Games with a drops campaign Twitch shows to this account.</p>
+					<ul class="available-list" id="available"></ul>
+				</article>
+			</div>
+		</section>
+
 		<section id="tab-inventory" class="tab-panel" role="tabpanel" hidden>
 			<div class="toolbar">
 				<div class="chips" id="inv-status" role="group" aria-label="Status filter">
@@ -103,26 +144,6 @@
 
 		<section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
 			<div class="settings">
-				<article class="panel">
-					<h2>Games to watch</h2>
-					<p class="hint">Mined from top to bottom. Use the arrows to change priority.</p>
-					<ol class="game-list" id="games"></ol>
-					<form class="inline-form" id="game-add">
-						<input id="game-input" list="games-available" placeholder="Add a game" autocomplete="off" aria-label="Game name">
-						<datalist id="games-available"></datalist>
-						<button type="submit">Add</button>
-					</form>
-					<button class="btn-ghost small-btn" id="games-add-all" type="button">Add every game with a campaign</button>
-					<label class="toggle">
-						<input type="checkbox" id="priority-only">
-						<span class="toggle-track"></span>
-						<span class="toggle-label">
-							Only mine games on this list
-							<small>When off, other eligible games are mined after the listed ones run out.</small>
-						</span>
-					</label>
-				</article>
-
 				<article class="panel">
 					<h2>Rewards</h2>
 					<p class="hint">Only drops with these reward types are mined.</p>

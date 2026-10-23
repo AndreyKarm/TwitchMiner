@@ -122,7 +122,7 @@ const invFilter = Object.assign({ status: 'all', link: 'all', search: '' }, stor
 
 // ---------- tabs ----------
 
-const TABS = ['main', 'inventory', 'settings'];
+const TABS = ['main', 'games', 'inventory', 'settings'];
 let activeTab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'main';
 
 function showTab(name, focus = false) {
@@ -281,7 +281,7 @@ function renderWanted() {
 	$('#wanted-count').textContent = list.length ? `${list.length} game${list.length === 1 ? '' : 's'}` : '';
 	if (!list.length) {
 		const hint = state.settings && !state.settings.games_to_watch.length && state.settings.priority_list_only
-			? 'Add games in Settings to start mining.'
+			? 'Add games in the Games tab to start mining.'
 			: 'No campaign has rewards left to mine.';
 		root.replaceChildren(h('p', { class: 'empty' }, hint));
 		return;
@@ -524,13 +524,13 @@ const BENEFITS = [
 async function saveSettings(patch, message) {
 	try {
 		state.settings = await api('/api/settings', patch);
-		renderSettings(true);
 		if (message) toast(message);
 	} catch (err) {
 		if (err.data?.settings) state.settings = err.data.settings;
-		renderSettings(true);
 		toast(err.message, true);
 	}
+	renderSettings(true);
+	renderGamesTab();
 }
 
 // renderSettings refreshes the form. Text fields being edited are left
@@ -538,22 +538,7 @@ async function saveSettings(patch, message) {
 function renderSettings(force = false) {
 	const s = state.settings;
 	if (!s) return;
-	const available = new Set((state.games || []).map((g) => g.toLowerCase()));
 
-	$('#games').replaceChildren(
-		...(s.games_to_watch.length
-			? s.games_to_watch.map((name, i, all) =>
-				h('li', { class: 'game-row' },
-					h('span', { class: 'rank' }, i + 1),
-					h('span', { class: available.has(name.toLowerCase()) ? 'name' : 'name missing', title: available.has(name.toLowerCase()) ? name : `${name} (no campaign right now)` }, name),
-					h('button', { class: 'icon-btn', type: 'button', 'aria-label': `Move ${name} up`, disabled: i === 0, onclick: () => moveGame(i, -1) }, '↑'),
-					h('button', { class: 'icon-btn', type: 'button', 'aria-label': `Move ${name} down`, disabled: i === all.length - 1, onclick: () => moveGame(i, 1) }, '↓'),
-					h('button', { class: 'icon-btn remove', type: 'button', 'aria-label': `Remove ${name}`, onclick: () => removeGame(i) }, '✕'),
-				))
-			: [h('li', { class: 'empty' }, 'No games yet. Add one below.')]),
-	);
-
-	$('#priority-only').checked = s.priority_list_only;
 	$('#allow-unlinked').checked = s.allow_unlinked_campaigns;
 
 	$('#benefits').replaceChildren(
@@ -584,56 +569,6 @@ for (const sel of ['#blacklist', '#refresh', '#quality', '#proxy']) {
 	$(sel).addEventListener('input', (e) => { e.target.dataset.dirty = '1'; });
 }
 
-function setGames(list, message) {
-	return saveSettings({ games_to_watch: list }, message);
-}
-
-function moveGame(i, dir) {
-	const list = [...state.settings.games_to_watch];
-	[list[i], list[i + dir]] = [list[i + dir], list[i]];
-	setGames(list);
-}
-
-function removeGame(i) {
-	const list = [...state.settings.games_to_watch];
-	const [name] = list.splice(i, 1);
-	setGames(list, `Removed ${name}`);
-}
-
-// resolveGame maps typed text to an available game: exact match first, then
-// a unique partial match. Unknown names are kept as typed.
-function resolveGame(text) {
-	const q = text.trim().toLowerCase();
-	const games = state.games || [];
-	const exact = games.find((g) => g.toLowerCase() === q);
-	if (exact) return { name: exact };
-	const partial = games.filter((g) => g.toLowerCase().includes(q));
-	if (partial.length === 1) return { name: partial[0] };
-	if (partial.length > 1) return { error: `"${text.trim()}" matches ${partial.length} games. Be more specific.` };
-	return { name: text.trim() };
-}
-
-$('#game-add').addEventListener('submit', (e) => {
-	e.preventDefault();
-	const input = $('#game-input');
-	if (!input.value.trim()) return;
-	const { name, error } = resolveGame(input.value);
-	if (error) return toast(error, true);
-	const list = state.settings.games_to_watch;
-	if (list.some((g) => g.toLowerCase() === name.toLowerCase())) return toast(`${name} is already on the list.`);
-	input.value = '';
-	setGames([...list, name], `Added ${name}`);
-});
-
-$('#games-add-all').addEventListener('click', () => {
-	const list = state.settings.games_to_watch;
-	const have = new Set(list.map((g) => g.toLowerCase()));
-	const extra = (state.games || []).filter((g) => !have.has(g.toLowerCase()));
-	if (!extra.length) return toast('Every game with a campaign is already listed.');
-	setGames([...list, ...extra], `Added ${extra.length} game${extra.length === 1 ? '' : 's'}`);
-});
-
-$('#priority-only').addEventListener('change', (e) => saveSettings({ priority_list_only: e.target.checked }));
 $('#allow-unlinked').addEventListener('change', (e) => saveSettings({ allow_unlinked_campaigns: e.target.checked }));
 
 $('#blacklist-save').addEventListener('click', () => {
@@ -652,11 +587,6 @@ $('#connection-save').addEventListener('click', () => {
 		proxy: $('#proxy').value.trim(),
 	}, 'Connection settings saved');
 });
-
-function renderGames() {
-	$('#games-available').replaceChildren(...(state.games || []).map((g) => h('option', { value: g })));
-	renderSettings();
-}
 
 $('#reload').addEventListener('click', () =>
 	api('/api/reload').then(() => toast('Reloading the inventory...')).catch((err) => toast(err.message, true)));
@@ -689,18 +619,360 @@ function confirmDialog(title, text, action, onConfirm) {
 	confirmBtn.focus();
 }
 
+// ---------- games tab ----------
+
+const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+const listedGames = () => state.settings?.games_to_watch || [];
+const isListed = (name) => listedGames().some((g) => sameName(g, name));
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// gameCatalog summarizes every game with a campaign, most useful first:
+// games with drops left to mine, then active ones, then by the earliest end.
+function gameCatalog() {
+	const byName = new Map();
+	const entry = (name, icon) => {
+		const key = name.toLowerCase();
+		if (!byName.has(key)) {
+			byName.set(key, { name, icon: null, active: 0, upcoming: 0, linked: false, starts: Infinity, ends: Infinity, toMine: 0, rewards: [] });
+		}
+		const g = byName.get(key);
+		if (!g.icon && safeURL(icon)) g.icon = icon;
+		return g;
+	};
+	for (const c of state.inventory || []) {
+		if (c.expired) continue;
+		const g = entry(c.game_name, c.game_icon);
+		if (c.active) g.active++;
+		if (c.upcoming) {
+			g.upcoming++;
+			g.starts = Math.min(g.starts, Date.parse(c.starts_at));
+		}
+		g.linked ||= c.linked;
+		g.ends = Math.min(g.ends, Date.parse(c.ends_at));
+		for (const d of c.drops) {
+			if (d.is_claimed || !d.is_mineable) continue;
+			g.toMine++;
+			for (const b of d.benefits) {
+				if (g.rewards.length < 3 && !g.rewards.includes(b.name)) g.rewards.push(b.name);
+			}
+		}
+	}
+	for (const name of state.games || []) entry(name);
+	return [...byName.values()].sort((a, b) =>
+		(b.toMine > 0) - (a.toMine > 0) || (b.active > 0) - (a.active > 0) || a.ends - b.ends || a.name.localeCompare(b.name));
+}
+
+function gameMeta(g) {
+	if (!g || !(g.active || g.upcoming)) return 'No campaign right now';
+	const parts = [];
+	if (g.active) parts.push(plural(g.active, 'active campaign'));
+	else parts.push(`Starts ${relative(new Date(g.starts).toISOString())}`);
+	parts.push(g.toMine ? `${plural(g.toMine, 'drop')} to mine` : 'nothing left to mine');
+	if (Number.isFinite(g.ends)) parts.push(`ends ${relative(new Date(g.ends).toISOString())}`);
+	return parts.join(' · ');
+}
+
+function addGame(name) {
+	name = name.trim();
+	if (!name || !state.settings) return;
+	if (isListed(name)) return toast(`${name} is already on your watch list.`);
+	const known = gameCatalog().find((g) => sameName(g.name, name));
+	if (known) name = known.name;
+	setWatchList([...listedGames(), name], `Added ${name}`);
+}
+
+function removeGame(name) {
+	setWatchList(listedGames().filter((g) => g !== name), `Removed ${name}`);
+}
+
+function moveGame(from, to) {
+	const list = [...listedGames()];
+	const [game] = list.splice(from, 1);
+	list.splice(to, 0, game);
+	setWatchList(list);
+}
+
+// setWatchList shows the new order right away, then saves it.
+function setWatchList(list, message) {
+	state.settings.games_to_watch = list;
+	renderGamesTab();
+	renderWanted();
+	saveSettings({ games_to_watch: list }, message);
+}
+
+let drag = null;
+let renderDeferred = false;
+
+function renderGamesTab() {
+	if (!state.settings) return;
+	if (drag) {
+		renderDeferred = true;
+		return;
+	}
+	renderDeferred = false;
+	const catalog = gameCatalog();
+	const byName = new Map(catalog.map((g) => [g.name.toLowerCase(), g]));
+	const list = listedGames();
+	// Keep keyboard focus on the same handle when the list is redrawn.
+	const focused = document.activeElement?.closest?.('#games .game-row')?.dataset.index;
+	$('#priority-only').checked = state.settings.priority_list_only;
+	$('#watch-count').textContent = list.length ? plural(list.length, 'game') : '';
+	$('#games').replaceChildren(
+		...(list.length
+			? list.map((name, i) => watchRow(name, i, list.length, byName.get(name.toLowerCase())))
+			: [h('li', { class: 'empty' }, 'Your watch list is empty. Search above or add a game from the list.')]),
+	);
+	if (focused !== undefined) $(`#games .game-row[data-index="${focused}"] .drag-handle`)?.focus();
+	renderAvailable(catalog);
+	if (combo.open) renderSuggestions();
+}
+
+function watchRow(name, i, total, g) {
+	return h('li', { class: 'game-row', 'data-index': i, onpointerdown: (e) => startDrag(e, i) },
+		h('button', {
+			class: 'drag-handle',
+			type: 'button',
+			title: 'Drag to reorder',
+			'aria-label': `${name}, priority ${i + 1} of ${total}. Use arrow keys to move.`,
+			onkeydown: (e) => keyMove(e, i),
+		}, h('span', { class: 'grip', 'aria-hidden': 'true' })),
+		h('span', { class: 'rank' }, i + 1),
+		thumb(g?.icon, 'thumb thumb-sm', 30, 40),
+		h('div', { class: 'game-row-body' },
+			h('span', { class: 'name', title: name }, name),
+			h('span', { class: g?.toMine ? 'game-row-meta' : 'game-row-meta dim' }, gameMeta(g))),
+		h('button', { class: 'icon-btn remove', type: 'button', title: 'Remove', 'aria-label': `Remove ${name}`, onclick: () => removeGame(name) }, '✕'),
+	);
+}
+
+function keyMove(e, i) {
+	const last = listedGames().length - 1;
+	const to = { ArrowUp: i - 1, ArrowDown: i + 1, Home: 0, End: last }[e.key];
+	if (to === undefined) return;
+	e.preventDefault();
+	if (to < 0 || to > last || to === i) return;
+	moveGame(i, to);
+	$(`#games .game-row[data-index="${to}"] .drag-handle`)?.focus();
+}
+
+// startDrag reorders with pointer events so mouse, pen and touch all work.
+// Touch drags start only from the handle, so the list still scrolls.
+function startDrag(e, from) {
+	if (e.button !== 0 || e.target.closest('.icon-btn')) return;
+	if (e.pointerType !== 'mouse' && !e.target.closest('.drag-handle')) return;
+	const listEl = $('#games');
+	const rows = [...listEl.querySelectorAll('.game-row')];
+	if (rows.length < 2) return;
+	e.preventDefault();
+	const row = rows[from];
+	const tops = rows.map((r) => r.getBoundingClientRect().top);
+	const step = tops[1] - tops[0];
+	const startY = e.clientY;
+	drag = { to: from };
+	row.setPointerCapture(e.pointerId);
+	row.classList.add('dragging');
+	listEl.classList.add('sorting');
+
+	const move = (ev) => {
+		const dy = Math.max(tops[0] - tops[from], Math.min(tops.at(-1) - tops[from], ev.clientY - startY));
+		row.style.transform = `translateY(${dy}px)`;
+		const to = Math.max(0, Math.min(rows.length - 1, from + Math.round(dy / step)));
+		drag.to = to;
+		rows.forEach((r, i) => {
+			if (r === row) return;
+			let shift = 0;
+			if (from < to && i > from && i <= to) shift = -step;
+			else if (from > to && i >= to && i < from) shift = step;
+			r.style.transform = shift ? `translateY(${shift}px)` : '';
+		});
+	};
+	const end = (ev) => {
+		row.removeEventListener('pointermove', move);
+		row.removeEventListener('pointerup', end);
+		row.removeEventListener('pointercancel', end);
+		const { to } = drag;
+		drag = null;
+		listEl.classList.remove('sorting');
+		if (ev.type === 'pointerup' && to !== from) {
+			moveGame(from, to);
+			return;
+		}
+		row.classList.remove('dragging');
+		rows.forEach((r) => { r.style.transform = ''; });
+		if (renderDeferred) renderGamesTab();
+	};
+	row.addEventListener('pointermove', move);
+	row.addEventListener('pointerup', end);
+	row.addEventListener('pointercancel', end);
+}
+
+function renderAvailable(catalog) {
+	const root = $('#available');
+	if (!catalog.length) {
+		root.replaceChildren(h('li', { class: 'empty' }, state.inventory.length ? 'No game has an open campaign right now.' : 'Campaigns are still loading.'));
+		$('#games-add-all').disabled = true;
+		return;
+	}
+	root.replaceChildren(...catalog.map((g) => {
+		const listed = isListed(g.name);
+		return h('li', { class: listed ? 'available-item listed' : 'available-item' },
+			thumb(g.icon, 'thumb', 36, 48),
+			h('div', { class: 'available-body' },
+				h('div', { class: 'available-name' }, g.name, ' ',
+					(g.active || g.upcoming) && !g.linked ? h('span', { class: 'tag tag-red', title: 'Link your game account on Twitch to earn these rewards' }, 'not linked') : null),
+				h('div', { class: 'available-meta' }, gameMeta(g)),
+				g.rewards.length ? h('div', { class: 'available-rewards', title: g.rewards.join('\n') }, g.rewards.join(' · ')) : null,
+			),
+			listed
+				? h('span', { class: 'added' }, 'Added ✓')
+				: h('button', { type: 'button', class: 'btn-ghost small-btn', 'aria-label': `Add ${g.name}`, onclick: () => addGame(g.name) }, 'Add'),
+		);
+	}));
+	$('#games-add-all').disabled = catalog.every((g) => isListed(g.name));
+}
+
+$('#games-add-all').addEventListener('click', () => {
+	const extra = gameCatalog().map((g) => g.name).filter((name) => !isListed(name));
+	if (extra.length) setWatchList([...listedGames(), ...extra], `Added ${plural(extra.length, 'game')}`);
+});
+
+$('#priority-only').addEventListener('change', (e) => saveSettings({ priority_list_only: e.target.checked }));
+
+// ---------- game search (combobox) ----------
+
+const combo = { open: false, items: [], active: -1 };
+const comboInput = $('#game-input');
+const comboList = $('#game-suggestions');
+
+// suggestionItems lists unlisted games matching the query, prefix matches
+// first, plus an option to add exactly what was typed.
+function suggestionItems() {
+	const typed = comboInput.value.trim();
+	const q = typed.toLowerCase();
+	const catalog = gameCatalog();
+	let matches = catalog.filter((g) => !isListed(g.name) && g.name.toLowerCase().includes(q));
+	if (q) matches.sort((a, b) => b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q));
+	const items = matches.slice(0, 8).map((game) => ({ name: game.name, game }));
+	if (typed && !isListed(typed) && !catalog.some((g) => sameName(g.name, typed))) items.push({ name: typed, custom: true });
+	return items;
+}
+
+function renderSuggestions() {
+	combo.items = suggestionItems();
+	combo.active = Math.min(combo.active, combo.items.length - 1);
+	if (!combo.items.length) {
+		const typed = comboInput.value.trim();
+		comboList.replaceChildren(h('li', { class: 'suggestion-empty', role: 'presentation' },
+			typed ? `${typed} is already on your watch list.` : 'Every game with a campaign is on your list. Type a name to add another game.'));
+	} else {
+		comboList.replaceChildren(...combo.items.map((item, i) =>
+			h('li', {
+				id: `suggestion-${i}`,
+				role: 'option',
+				class: i === combo.active ? 'suggestion active' : 'suggestion',
+				'aria-selected': String(i === combo.active),
+				onpointerdown: (e) => {
+					e.preventDefault();
+					pickSuggestion(i);
+				},
+				onpointerenter: () => setActiveSuggestion(i),
+			},
+			item.custom ? h('span', { class: 'thumb thumb-sm suggestion-plus', 'aria-hidden': 'true' }, '+') : thumb(item.game.icon, 'thumb thumb-sm', 30, 40),
+			h('div', { class: 'suggestion-body' },
+				h('div', { class: 'suggestion-name' }, item.custom ? `Add “${item.name}”` : item.name),
+				h('div', { class: 'suggestion-meta' }, item.custom ? 'Mining starts once Twitch shows you a campaign for it.' : gameMeta(item.game))),
+			)));
+	}
+	updateActiveDescendant();
+}
+
+function setActiveSuggestion(i) {
+	combo.active = i;
+	comboList.querySelectorAll('.suggestion').forEach((el, j) => {
+		el.classList.toggle('active', j === i);
+		el.setAttribute('aria-selected', String(j === i));
+	});
+	comboList.querySelector('.suggestion.active')?.scrollIntoView({ block: 'nearest' });
+	updateActiveDescendant();
+}
+
+function updateActiveDescendant() {
+	if (combo.active >= 0) comboInput.setAttribute('aria-activedescendant', `suggestion-${combo.active}`);
+	else comboInput.removeAttribute('aria-activedescendant');
+}
+
+function openCombo() {
+	if (combo.open) return;
+	combo.open = true;
+	comboList.hidden = false;
+	comboInput.setAttribute('aria-expanded', 'true');
+	renderSuggestions();
+}
+
+function closeCombo() {
+	combo.open = false;
+	combo.active = -1;
+	comboList.hidden = true;
+	comboInput.setAttribute('aria-expanded', 'false');
+	updateActiveDescendant();
+}
+
+function pickSuggestion(i) {
+	const item = combo.items[i];
+	if (!item) return;
+	addGame(item.name);
+	comboInput.value = '';
+	combo.active = -1;
+	renderSuggestions();
+}
+
+comboInput.addEventListener('focus', openCombo);
+comboInput.addEventListener('blur', closeCombo);
+comboInput.addEventListener('input', () => {
+	combo.active = comboInput.value.trim() ? 0 : -1;
+	openCombo();
+	renderSuggestions();
+});
+comboInput.addEventListener('keydown', (e) => {
+	switch (e.key) {
+		case 'ArrowDown':
+			e.preventDefault();
+			openCombo();
+			if (combo.items.length) setActiveSuggestion((combo.active + 1) % combo.items.length);
+			break;
+		case 'ArrowUp':
+			e.preventDefault();
+			openCombo();
+			if (combo.items.length) setActiveSuggestion((combo.active - 1 + combo.items.length) % combo.items.length);
+			break;
+		case 'Enter':
+			e.preventDefault();
+			if (combo.open && combo.active >= 0) pickSuggestion(combo.active);
+			else if (comboInput.value.trim()) {
+				addGame(comboInput.value);
+				comboInput.value = '';
+				renderSuggestions();
+			}
+			break;
+		case 'Escape':
+			if (combo.open) closeCombo();
+			else comboInput.value = '';
+			break;
+	}
+});
+
 // ---------- live updates ----------
 
 const renderers = {
 	status: renderStatus,
 	login: renderLogin,
-	settings: () => { renderSettings(); renderWanted(); },
+	settings: () => { renderSettings(); renderGamesTab(); renderWanted(); },
 	channels: renderChannels,
-	inventory: renderInventory,
+	inventory: () => { renderInventory(); renderGamesTab(); },
 	progress: () => { renderProgress(); renderWanted(); },
 	wanted: renderWanted,
 	manual: renderManual,
-	games: renderGames,
+	games: renderGamesTab,
 	pubsub: renderPubsub,
 	version: () => { $('#version').textContent = `TwitchMiner ${state.version}`; },
 };
