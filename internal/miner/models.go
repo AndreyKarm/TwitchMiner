@@ -316,6 +316,9 @@ type Campaign struct {
 	aclIDs   map[string]bool
 	Drops    []*Drop
 	dropByID map[string]*Drop
+	// Discovered campaigns were found on live channels because Twitch hides
+	// the campaign list; their account-link status is unknown.
+	Discovered bool
 
 	evalKey string
 	eval    *Evaluation
@@ -343,20 +346,22 @@ type rawCampaign struct {
 		IsEnabled *bool        `json:"isEnabled"`
 	} `json:"allow"`
 	TimeBasedDrops []rawDrop `json:"timeBasedDrops"`
+	Discovered     bool      `json:"discovered"`
 }
 
 func newCampaign(m *Miner, r rawCampaign, claimedBenefits map[string]time.Time) *Campaign {
 	c := &Campaign{
-		m:        m,
-		ID:       r.ID,
-		Name:     r.Name,
-		Game:     newGame(r.Game),
-		LinkURL:  r.AccountLinkURL,
-		StartsAt: r.StartAt,
-		EndsAt:   r.EndAt,
-		valid:    r.Status != "EXPIRED",
-		aclIDs:   map[string]bool{},
-		dropByID: map[string]*Drop{},
+		m:          m,
+		ID:         r.ID,
+		Name:       r.Name,
+		Game:       newGame(r.Game),
+		LinkURL:    r.AccountLinkURL,
+		StartsAt:   r.StartAt,
+		EndsAt:     r.EndAt,
+		valid:      r.Status != "EXPIRED",
+		aclIDs:     map[string]bool{},
+		dropByID:   map[string]*Drop{},
+		Discovered: r.Discovered,
 	}
 	if r.Self != nil {
 		c.Linked = r.Self.IsAccountConnected

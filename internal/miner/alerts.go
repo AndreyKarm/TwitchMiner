@@ -131,21 +131,78 @@ func roughDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm", max(int(d.Minutes()), 0))
 }
 
-// deliverAlerts saves the seen list and sends alerts to every configured
-// channel. Failures are shown in the console without secrets.
-func (m *Miner) deliverAlerts(ctx context.Context, alerts []notify.Message, snapshot map[string]time.Time) {
+// deliverStarted saves the seen list and announces newly started campaigns.
+func (m *Miner) deliverStarted(alerts []notify.Message, snapshot map[string]time.Time) {
 	if snapshot != nil {
 		m.seen.save(snapshot)
 	}
-	if len(alerts) == 0 {
+	for _, a := range alerts {
+		m.print(a.Title)
+	}
+	m.sendAlerts(config.AlertCampaignStarted, alerts...)
+}
+
+// sendAlerts delivers messages for one event to every configured channel,
+// if the user turned that event on. It runs on its own context so an alert
+// about a session ending isn't cancelled with it. Failures are shown in the
+// console without secrets.
+func (m *Miner) sendAlerts(event string, msgs ...notify.Message) {
+	if len(msgs) == 0 {
 		return
 	}
 	s := m.settings.Get()
-	for _, a := range alerts {
-		m.print(a.Title)
-		for _, err := range m.send(ctx, s, a) {
+	if !s.AlertOn(event) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, msg := range msgs {
+		for _, err := range m.send(ctx, s, msg) {
 			m.print("Alert failed: " + err.Error())
 		}
+	}
+}
+
+// claimAlertsLocked describes a drop that was just claimed, plus its
+// campaign when that claim completed it.
+func (m *Miner) claimAlertsLocked(d *Drop) (claimed notify.Message, completed *notify.Message) {
+	c := d.Campaign
+	n, total := c.claimedCount()
+	rewards := d.rewardsText()
+	if rewards == "" {
+		rewards = d.Name
+	}
+	image := c.Game.BoxArtURL
+	if len(d.Benefits) > 0 && d.Benefits[0].ImageURL != "" {
+		image = d.Benefits[0].ImageURL
+	}
+	claimed = notify.Message{
+		Title: "Drop received: " + rewards,
+		URL:   "https://www.twitch.tv/drops/inventory",
+		Lines: []string{"Game: " + c.Game.Name, fmt.Sprintf("Campaign: %s (%d of %d claimed)", c.Name, n, total)},
+		Image: image,
+	}
+	if total > 0 && n == total {
+		completed = &notify.Message{
+			Title: "Campaign completed: " + c.Name,
+			URL:   c.URL(),
+			Lines: []string{"Game: " + c.Game.Name, fmt.Sprintf("All %d drops claimed.", total)},
+			Image: c.Game.BoxArtURL,
+		}
+	}
+	return claimed, completed
+}
+
+// loginAlert asks the user to log in again, with the code so it can be done
+// from a phone.
+func loginAlert(code, link string) notify.Message {
+	return notify.Message{
+		Title: "Twitch login needed",
+		URL:   link,
+		Lines: []string{
+			"Twitch logged TwitchMiner out, so mining has stopped.",
+			"Enter code " + code + " at twitch.tv/activate, or open the dashboard.",
+		},
 	}
 }
 

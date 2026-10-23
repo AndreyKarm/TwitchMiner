@@ -152,98 +152,114 @@
 		</section>
 
 		<section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
-			<div class="settings">
-				<article class="panel">
-					<h2>Rewards</h2>
-					<p class="hint">Only drops with these reward types are mined.</p>
-					<div class="check-grid" id="benefits"></div>
-					<label class="toggle">
-						<input type="checkbox" id="allow-unlinked">
-						<span class="toggle-track"></span>
-						<span class="toggle-label">
-							Mine campaigns with no linked game account
-							<small class="warn">Twitch may not award these rewards until you link the account. Check your progress on Twitch.</small>
-						</span>
-					</label>
-				</article>
+			<div class="settings-layout">
+				<div class="settings-col">
+					<article class="panel">
+						<h2>Mining rules</h2>
+						<div class="setting-group">
+							<h3 class="subhead">Reward types</h3>
+							<p class="hint">Only drops with these rewards are mined.</p>
+							<div class="check-grid check-grid-wide" id="benefits"></div>
+							<label class="toggle">
+								<input type="checkbox" id="allow-unlinked">
+								<span class="toggle-track"></span>
+								<span class="toggle-label">
+									Mine campaigns with no linked game account
+									<small class="warn">Twitch may not award these until you link the account.</small>
+								</span>
+							</label>
+						</div>
+						<div class="setting-group">
+							<h3 class="subhead">Ignored drops</h3>
+							<p class="hint">One word or phrase per line. Matching drops, and drops that depend on them, are skipped.</p>
+							<textarea id="blacklist" rows="3" spellcheck="false" placeholder="e.g. Skin"></textarea>
+							<div class="row-end"><button type="button" id="blacklist-save">Save</button></div>
+						</div>
+					</article>
 
-				<article class="panel">
-					<h2>Ignored drops</h2>
-					<p class="hint">One word or phrase per line. Drops whose names contain any of them, and drops that depend on them, are skipped.</p>
-					<textarea id="blacklist" rows="5" spellcheck="false" placeholder="e.g. Skin"></textarea>
-					<div class="row-end"><button type="button" id="blacklist-save">Save</button></div>
-				</article>
+					<article class="panel">
+						<h2>Connection</h2>
+						<div class="field-grid">
+							<label class="field">
+								<span>Reload inventory every (minutes)</span>
+								<input type="number" id="refresh" min="5" max="1440" step="1">
+							</label>
+							<label class="field">
+								<span>Connection quality</span>
+								<select id="quality">
+									<option value="1">1 – fast connection</option>
+									<option value="2">2</option>
+									<option value="3">3</option>
+									<option value="4">4</option>
+									<option value="5">5</option>
+									<option value="6">6 – very slow connection</option>
+								</select>
+							</label>
+						</div>
+						<div class="inline-form proxy-row">
+							<label class="field">
+								<span>Proxy (optional)</span>
+								<input type="text" id="proxy" placeholder="http://host:port or socks5://host:port" spellcheck="false">
+							</label>
+							<button type="button" id="connection-save">Save</button>
+						</div>
+					</article>
+				</div>
 
-				<article class="panel">
-					<h2>Campaign alerts</h2>
-					<p class="hint">Get a message when a drops campaign starts for a game you'd mine. Only campaigns Twitch shows this login are covered.</p>
+				<div class="settings-col">
+					<article class="panel">
+						<h2>Alerts</h2>
+						<p class="hint" id="alerts-hint">Choose what to hear about, then connect Telegram, Discord or both.</p>
+						<h3 class="subhead">Send me alerts for</h3>
+						<div class="check-grid check-grid-wide" id="alert-events"></div>
 
-					<h3 class="subhead">Telegram <span class="tag" id="telegram-state"></span></h3>
-					<p class="hint">Create a bot with @BotFather and copy its token. Then send the bot a message and use your chat ID, or add it to a channel and use @channelname.</p>
-					<div class="field-grid">
-						<label class="field">
-							<span>Bot token</span>
-							<input type="password" id="telegram-token" autocomplete="off" spellcheck="false">
-						</label>
-						<label class="field">
-							<span>Chat ID</span>
-							<input type="text" id="telegram-chat" autocomplete="off" spellcheck="false" placeholder="123456789 or @channel">
-						</label>
-					</div>
-					<div class="button-row alert-actions">
-						<button type="button" id="telegram-save">Save</button>
-						<button type="button" class="btn-ghost" id="telegram-test">Send test</button>
-						<button type="button" class="btn-ghost" id="telegram-clear">Remove</button>
-					</div>
+						<div class="subcard">
+							<h3 class="subhead">Telegram <span class="tag" id="telegram-state"></span></h3>
+							<p class="hint">Create a bot with @BotFather and paste its token. Message the bot once and use your chat ID, or add it to a channel and use @channelname.</p>
+							<div class="field-grid">
+								<label class="field">
+									<span>Bot token</span>
+									<input type="password" id="telegram-token" autocomplete="off" spellcheck="false">
+								</label>
+								<label class="field">
+									<span>Chat ID</span>
+									<input type="text" id="telegram-chat" autocomplete="off" spellcheck="false" placeholder="123456789 or @channel">
+								</label>
+							</div>
+							<div class="button-row alert-actions">
+								<button type="button" id="telegram-save">Save</button>
+								<button type="button" class="btn-ghost" id="telegram-test">Send test</button>
+								<button type="button" class="btn-ghost" id="telegram-clear">Remove</button>
+							</div>
+						</div>
 
-					<h3 class="subhead">Discord <span class="tag" id="discord-state"></span></h3>
-					<p class="hint">In your server: Server Settings → Integrations → Webhooks → New Webhook, then copy its URL.</p>
-					<label class="field">
-						<span>Webhook URL</span>
-						<input type="password" id="discord-webhook" autocomplete="off" spellcheck="false">
-					</label>
-					<div class="button-row alert-actions">
-						<button type="button" id="discord-save">Save</button>
-						<button type="button" class="btn-ghost" id="discord-test">Send test</button>
-						<button type="button" class="btn-ghost" id="discord-clear">Remove</button>
-					</div>
-				</article>
+						<div class="subcard">
+							<h3 class="subhead">Discord <span class="tag" id="discord-state"></span></h3>
+							<p class="hint">Server Settings → Integrations → Webhooks → New Webhook, then copy its URL.</p>
+							<label class="field">
+								<span>Webhook URL</span>
+								<input type="password" id="discord-webhook" autocomplete="off" spellcheck="false">
+							</label>
+							<div class="button-row alert-actions">
+								<button type="button" id="discord-save">Save</button>
+								<button type="button" class="btn-ghost" id="discord-test">Send test</button>
+								<button type="button" class="btn-ghost" id="discord-clear">Remove</button>
+							</div>
+						</div>
+					</article>
 
-				<article class="panel">
-					<h2>Connection</h2>
-					<div class="field-grid">
-						<label class="field">
-							<span>Reload inventory every (minutes)</span>
-							<input type="number" id="refresh" min="5" max="1440" step="1">
-						</label>
-						<label class="field">
-							<span>Connection quality</span>
-							<select id="quality">
-								<option value="1">1 – fast connection</option>
-								<option value="2">2</option>
-								<option value="3">3</option>
-								<option value="4">4</option>
-								<option value="5">5</option>
-								<option value="6">6 – very slow connection</option>
-							</select>
-						</label>
-						<label class="field field-wide">
-							<span>Proxy (optional)</span>
-							<input type="text" id="proxy" placeholder="http://host:port or socks5://host:port" spellcheck="false">
-						</label>
-					</div>
-					<div class="row-end"><button type="button" id="connection-save">Save</button></div>
-				</article>
-
-				<article class="panel">
-					<h2>Account</h2>
-					<p id="account-detail" class="hint"></p>
-					<div class="button-row">
-						<button type="button" class="btn-ghost" id="reload">Reload inventory</button>
-						<button type="button" class="btn-danger" id="logout">Log out of Twitch</button>
-					</div>
-					<p class="muted small" id="version"></p>
-				</article>
+					<article class="panel account-panel">
+						<div>
+							<h2>Account</h2>
+							<p id="account-detail" class="hint"></p>
+							<p class="muted small" id="version"></p>
+						</div>
+						<div class="button-row">
+							<button type="button" class="btn-ghost" id="reload">Reload inventory</button>
+							<button type="button" class="btn-danger" id="logout">Log out</button>
+						</div>
+					</article>
+				</div>
 			</div>
 		</section>
 	</main>

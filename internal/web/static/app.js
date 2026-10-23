@@ -443,7 +443,9 @@ function campaignCard(c) {
 	if (c.active) tags.push(h('span', { class: 'tag tag-green' }, 'active'));
 	else if (c.upcoming) tags.push(h('span', { class: 'tag' }, 'upcoming'));
 	else tags.push(h('span', { class: 'tag tag-red' }, 'expired'));
-	if (c.linked) tags.push(h('span', { class: 'tag' }, 'linked'));
+	if (c.discovered) {
+		tags.push(h('span', { class: 'tag tag-pink', title: 'Twitch hides the campaign list from this login, so this was found on a live channel. Its account-link status is unknown, so check on Twitch that your game account is linked.' }, 'found on stream'));
+	} else if (c.linked) tags.push(h('span', { class: 'tag' }, 'linked'));
 	else if (linkURL) tags.push(h('a', { href: linkURL, target: '_blank', rel: 'noopener noreferrer', class: 'tag tag-red', title: 'Link your game account to earn these rewards' }, 'not linked ↗'));
 	else tags.push(h('span', { class: 'tag tag-red' }, 'not linked'));
 	tags.push(h('span', { class: c.finished ? 'tag tag-green' : 'tag' }, `${c.claimed_drops}/${c.total_drops} claimed`));
@@ -522,6 +524,13 @@ const BENEFITS = [
 	['UNKNOWN', 'Other rewards'],
 ];
 
+const ALERT_EVENTS = [
+	['campaign_started', 'Campaign started', 'A new campaign for a game you\'d mine'],
+	['drop_claimed', 'Drop received', 'Each reward the miner claims'],
+	['campaign_completed', 'Campaign completed', 'Every drop in a campaign is claimed'],
+	['login_required', 'Login needed', 'Twitch logged the miner out; includes the new code'],
+];
+
 async function saveSettings(patch, message) {
 	try {
 		state.settings = await api('/api/settings', patch);
@@ -566,6 +575,23 @@ function renderSettings(force = false) {
 	setField('#proxy', s.proxy);
 	setField('#telegram-chat', s.telegram_chat_id);
 
+	$('#alert-events').replaceChildren(
+		...ALERT_EVENTS.map(([key, label, detail]) =>
+			h('label', { class: 'check' },
+				h('input', {
+					type: 'checkbox',
+					checked: s.alert_events?.[key] !== false,
+					onchange: (e) => saveSettings({ alert_events: { [key]: e.target.checked } }),
+				}),
+				h('span', { class: 'check-text' }, label, h('small', null, detail)))),
+	);
+	const connected = s.telegram_configured || s.discord_configured;
+	const hint = $('#alerts-hint');
+	hint.textContent = connected
+		? 'Choose what to hear about. Alerts go to every connected channel.'
+		: 'Connect Telegram, Discord or both below to start receiving alerts.';
+	hint.classList.toggle('warn', !connected);
+
 	// The server never sends secrets back; it only says whether they're set.
 	const alertState = (id, on) => {
 		const tag = $(id);
@@ -574,8 +600,9 @@ function renderSettings(force = false) {
 	};
 	alertState('#telegram-state', s.telegram_configured);
 	alertState('#discord-state', s.discord_configured);
-	$('#telegram-token').placeholder = s.telegram_token_set ? 'Saved. Leave blank to keep it.' : '123456789:ABC-DEF...';
-	$('#discord-webhook').placeholder = s.discord_configured ? 'Saved. Leave blank to keep it.' : 'https://discord.com/api/webhooks/...';
+	// Blank fields keep the saved secret, so say so without taking much room.
+	$('#telegram-token').placeholder = s.telegram_token_set ? 'Saved (hidden)' : '123456789:ABC-DEF...';
+	$('#discord-webhook').placeholder = s.discord_configured ? 'Saved (hidden). Paste a new URL to replace it.' : 'https://discord.com/api/webhooks/...';
 	$('#telegram-test').disabled = !s.telegram_configured;
 	$('#telegram-clear').disabled = !s.telegram_token_set && !s.telegram_chat_id;
 	$('#discord-test').disabled = !s.discord_configured;

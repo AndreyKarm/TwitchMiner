@@ -1098,12 +1098,115 @@ a.campaign-title:hover {
 
 /* ---------- settings ---------- */
 
-.settings {
+/* Two fixed columns, each a stack, so short panels don't leave holes the
+   way an auto-fit grid of uneven panels does. */
+.settings-layout {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 	gap: 1.25rem;
 	align-items: start;
 	padding-bottom: 2rem;
+}
+
+.settings-col {
+	display: flex;
+	flex-direction: column;
+	gap: 1.25rem;
+	min-width: 0;
+}
+
+.setting-group + .setting-group {
+	margin-top: 1.25rem;
+	padding-top: 1.25rem;
+	border-top: 1px solid var(--secondary);
+}
+
+.setting-group > .subhead:first-child,
+.subcard > .subhead:first-child {
+	margin-top: 0;
+}
+
+.setting-group .hint {
+	margin-bottom: 0.75rem;
+}
+
+.setting-group .toggle {
+	margin-top: 1rem;
+}
+
+.subcard {
+	margin-top: 1rem;
+	padding: 1rem;
+	background: var(--surface);
+	border: 1px solid var(--secondary);
+	border-radius: 0.75rem;
+}
+
+.subcard .hint {
+	margin-bottom: 0.75rem;
+}
+
+.subcard input,
+.subcard select {
+	background: var(--background);
+}
+
+/* Two equal columns on wide screens, one on narrow ones, so four options
+   always form a tidy 2 x 2 instead of 3 + 1. */
+.check-grid-wide {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 520px) {
+	.check-grid-wide {
+		grid-template-columns: 1fr;
+	}
+}
+
+.check-text {
+	display: flex;
+	flex-direction: column;
+	gap: 0.1rem;
+	min-width: 0;
+}
+
+.check-text small {
+	color: var(--muted);
+	font-size: 0.75rem;
+	font-weight: 500;
+}
+
+.check:has(input:checked) {
+	border-color: var(--line);
+}
+
+.proxy-row {
+	align-items: flex-end;
+	margin: 1rem 0 0;
+}
+
+.proxy-row .field {
+	flex: 1;
+}
+
+.account-panel {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 1rem;
+}
+
+.account-panel h2 {
+	margin-bottom: 0.35rem;
+}
+
+.account-panel .hint {
+	margin-bottom: 0.2rem;
+}
+
+.account-panel .button-row {
+	margin-bottom: 0;
 }
 
 /* ---------- games tab ---------- */
@@ -1542,7 +1645,8 @@ a.campaign-title:hover {
 
 @media (max-width: 960px) {
 	.grid,
-	.games-layout {
+	.games-layout,
+	.settings-layout {
 		grid-template-columns: 1fr;
 	}
 
@@ -1575,9 +1679,12 @@ a.campaign-title:hover {
 		flex-wrap: wrap;
 	}
 
-	.campaign-grid,
-	.settings {
+	.campaign-grid {
 		grid-template-columns: 1fr;
+	}
+
+	.proxy-row {
+		flex-wrap: wrap;
 	}
 
 	.toolbar-right,

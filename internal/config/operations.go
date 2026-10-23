@@ -124,6 +124,12 @@ var (
 			"sortTypeIsRecency": false,
 		})
 
+	// OpAvailableDrops lists the drop campaigns a channel takes part in. It
+	// works for logins whose campaign dashboard Twitch hides.
+	OpAvailableDrops = newOp("DropsHighlightService_AvailableDrops",
+		"9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
+		map[string]any{"channelID": ""})
+
 	OpNotificationsDelete = newOp("OnsiteNotifications_DeleteNotification",
 		"13d463c831f28ffe17dccf55b3148ed8b3edbbd0ebadd56352f1ff0160616816",
 		map[string]any{"input": map[string]any{"id": ""}})

@@ -100,6 +100,30 @@ func TestSecretsStayServerSide(t *testing.T) {
 	}
 }
 
+func TestAlertEventsDefaultOnAndPatchIndividually(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	// An older settings file has no alert_events at all.
+	if err := os.WriteFile(path, []byte(`{"games_to_watch":["Rust"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range AlertEvents {
+		if !st.Get().AlertOn(e) {
+			t.Fatalf("%s should default to on", e)
+		}
+	}
+	s, err := st.Patch([]byte(`{"alert_events":{"drop_claimed":false,"bogus":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AlertOn(AlertDropClaimed) || !s.AlertOn(AlertCampaignStarted) || len(s.AlertEvents) != len(AlertEvents) {
+		t.Fatalf("patch should switch off one event only and drop unknown keys: %v", s.AlertEvents)
+	}
+}
+
 func TestLoadStoreFillsMissingBenefits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"mining_benefits":{"BADGE":false,"BOGUS":true}}`), 0o600); err != nil {

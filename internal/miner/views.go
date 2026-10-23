@@ -59,6 +59,7 @@ type CampaignView struct {
 	URL            string     `json:"url"`
 	LinkURL        string     `json:"link_url"`
 	Linked         bool       `json:"linked"`
+	Discovered     bool       `json:"discovered"`
 	Eligible       bool       `json:"eligible"`
 	StartsAt       time.Time  `json:"starts_at"`
 	EndsAt         time.Time  `json:"ends_at"`
@@ -181,21 +182,22 @@ func (m *Miner) campaignViewsLocked() []CampaignView {
 	out := []CampaignView{}
 	for _, c := range m.inventory {
 		v := CampaignView{
-			ID:       c.ID,
-			Name:     c.Name,
-			GameID:   c.Game.ID,
-			GameName: c.Game.Name,
-			GameIcon: c.Game.BoxArtURL,
-			URL:      c.URL(),
-			LinkURL:  c.LinkURL,
-			Linked:   c.Linked,
-			Eligible: c.Eligible(),
-			StartsAt: c.StartsAt,
-			EndsAt:   c.EndsAt,
-			Active:   c.Active(),
-			Upcoming: c.Upcoming(),
-			Expired:  c.Expired(),
-			Drops:    []DropView{},
+			ID:         c.ID,
+			Name:       c.Name,
+			GameID:     c.Game.ID,
+			GameName:   c.Game.Name,
+			GameIcon:   c.Game.BoxArtURL,
+			URL:        c.URL(),
+			LinkURL:    c.LinkURL,
+			Linked:     c.Linked,
+			Discovered: c.Discovered,
+			Eligible:   c.Eligible(),
+			StartsAt:   c.StartsAt,
+			EndsAt:     c.EndsAt,
+			Active:     c.Active(),
+			Upcoming:   c.Upcoming(),
+			Expired:    c.Expired(),
+			Drops:      []DropView{},
 		}
 		mineable := false
 		for _, d := range c.watchDrops() {

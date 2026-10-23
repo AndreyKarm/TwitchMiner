@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/AndreyKarm/TwitchMiner/internal/config"
+	"github.com/AndreyKarm/TwitchMiner/internal/twitch"
 )
+
+var twitchDecode = twitch.Decode
 
 // testMiner returns a miner with only the policy set, enough for model code.
 func testMiner(s config.Settings) *Miner {
@@ -178,6 +181,84 @@ func TestStartedCampaignAlerts(t *testing.T) {
 	}
 	if again, _ := m.collectStartedLocked(); len(again) != 0 {
 		t.Fatal("a campaign must only be announced once")
+	}
+}
+
+func TestClaimAlerts(t *testing.T) {
+	m := testMiner(config.Defaults())
+	c := testCampaign(m, "Rust",
+		dropSpec{id: "a", name: "First", minutes: 30, claimed: true},
+		dropSpec{id: "b", name: "Second", minutes: 60},
+	)
+	b := c.dropByID["b"]
+
+	claimed, completed := m.claimAlertsLocked(b)
+	if completed != nil || !strings.Contains(claimed.Title, "Second reward") || !strings.Contains(strings.Join(claimed.Lines, " "), "1 of 2") {
+		t.Fatalf("before the last claim: %+v, completed=%v", claimed, completed)
+	}
+
+	b.IsClaimed = true
+	claimed, completed = m.claimAlertsLocked(b)
+	if completed == nil || !strings.Contains(completed.Title, "Rust campaign") || !strings.Contains(strings.Join(claimed.Lines, " "), "2 of 2") {
+		t.Fatalf("the last claim should complete the campaign: %+v, %+v", claimed, completed)
+	}
+
+	login := loginAlert("ABCD1234", "https://www.twitch.tv/activate")
+	if !strings.Contains(strings.Join(login.Lines, " "), "ABCD1234") {
+		t.Fatalf("login alert should carry the code: %+v", login)
+	}
+}
+
+func TestDiscoveredCampaignsBecomeACLCampaigns(t *testing.T) {
+	wt := &Game{ID: "66366", Name: "War Thunder", Slug: "war-thunder", BoxArtURL: "https://example.com/wt.jpg"}
+	live := func(id, login string, g *Game) *Channel {
+		ch := newChannel(id, login, login, false)
+		ch.stream = &Stream{BroadcastID: "b" + id, DropsEnabled: true, Game: g}
+		return ch
+	}
+	start := time.Now().Add(-2 * time.Hour).UTC()
+	campaign := func(id, gameID string) map[string]any {
+		drop := func(dropID string, minutes float64, offset time.Duration) any {
+			return map[string]any{
+				"id": dropID, "name": dropID, "requiredMinutesWatched": minutes,
+				"startAt": start.Add(offset).Format(time.RFC3339), "endAt": start.Add(72 * time.Hour).Format(time.RFC3339),
+				"benefitEdges": []any{map[string]any{"benefit": map[string]any{"id": "b-" + dropID, "name": dropID + " reward", "distributionType": "DIRECT_ENTITLEMENT"}}},
+			}
+		}
+		return map[string]any{
+			"id": id, "name": "WTCS", "endAt": start.Add(72 * time.Hour).Format(time.RFC3339),
+			"game":           map[string]any{"id": gameID, "name": "x"},
+			"timeBasedDrops": []any{drop("later", 120, time.Hour), drop("first", 60, 0)},
+		}
+	}
+
+	found := map[string]map[string]any{}
+	addDiscovered(found, campaign("wtcs", "66366"), live("1", "pl", wt))
+	addDiscovered(found, campaign("wtcs", "66366"), live("2", "en", wt))
+	addDiscovered(found, campaign("wtcs", "66366"), live("2", "en", wt)) // same channel twice
+	// A cross-category promotion on a War Thunder stream is ignored.
+	addDiscovered(found, campaign("apple", "509663"), live("1", "pl", wt))
+	if len(found) != 1 {
+		t.Fatalf("want only the War Thunder campaign, got %d", len(found))
+	}
+
+	var rc rawCampaign
+	if err := twitchDecode(found["wtcs"], &rc); err != nil {
+		t.Fatal(err)
+	}
+	m := testMiner(config.Defaults())
+	c := newCampaign(m, rc, nil)
+	if !c.Discovered || !c.Active() || !c.Eligible() || c.Game.BoxArtURL != wt.BoxArtURL {
+		t.Fatalf("discovered campaign should be active and eligible: %+v", c)
+	}
+	if !c.StartsAt.Equal(start.Truncate(time.Second)) {
+		t.Fatalf("campaign should start with its earliest drop: got %v, want %v", c.StartsAt, start)
+	}
+	if len(c.ACL) != 2 || !c.aclIDs["1"] || !c.aclIDs["2"] {
+		t.Fatalf("allow list should be the channels carrying it: %+v", c.ACL)
+	}
+	if !c.allowsChannel(live("1", "pl", wt)) || c.allowsChannel(live("3", "fr", wt)) {
+		t.Fatal("only channels found carrying the campaign should progress it")
 	}
 }
 

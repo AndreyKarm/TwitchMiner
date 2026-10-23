@@ -15,6 +15,17 @@ import (
 // Benefit distribution types Twitch reports for drop rewards.
 var BenefitTypes = []string{"BADGE", "EMOTE", "DIRECT_ENTITLEMENT", "UNKNOWN"}
 
+// Alert events a user can turn on or off.
+const (
+	AlertCampaignStarted   = "campaign_started"
+	AlertDropClaimed       = "drop_claimed"
+	AlertCampaignCompleted = "campaign_completed"
+	AlertLoginRequired     = "login_required"
+)
+
+// AlertEvents lists every alert event; all are on by default.
+var AlertEvents = []string{AlertCampaignStarted, AlertDropClaimed, AlertCampaignCompleted, AlertLoginRequired}
+
 // Settings are the user's persisted preferences.
 type Settings struct {
 	// GamesToWatch is the ordered priority list of game names.
@@ -42,6 +53,9 @@ type Settings struct {
 	TelegramBotToken  string `json:"telegram_bot_token"`
 	TelegramChatID    string `json:"telegram_chat_id"`
 	DiscordWebhookURL string `json:"discord_webhook_url"`
+	// AlertEvents chooses which events send an alert, keyed by the Alert*
+	// constants.
+	AlertEvents map[string]bool `json:"alert_events"`
 }
 
 // PublicSettings is what the dashboard sees: secrets are blanked and
@@ -78,10 +92,15 @@ func Defaults() Settings {
 	for _, t := range BenefitTypes {
 		benefits[t] = true
 	}
+	events := make(map[string]bool, len(AlertEvents))
+	for _, e := range AlertEvents {
+		events[e] = true
+	}
 	return Settings{
 		GamesToWatch:           []string{},
 		PriorityListOnly:       true,
 		MiningBenefits:         benefits,
+		AlertEvents:            events,
 		DropNameBlacklist:      []string{},
 		ConnectionQuality:      1,
 		RefreshIntervalMinutes: 30,
@@ -97,8 +116,15 @@ func (s Settings) Clone() Settings {
 	for k, v := range s.MiningBenefits {
 		out.MiningBenefits[k] = v
 	}
+	out.AlertEvents = make(map[string]bool, len(s.AlertEvents))
+	for k, v := range s.AlertEvents {
+		out.AlertEvents[k] = v
+	}
 	return out
 }
+
+// AlertOn reports whether alerts for event are enabled.
+func (s Settings) AlertOn(event string) bool { return s.AlertEvents[event] }
 
 // Normalize trims and deduplicates lists and clamps numbers into range. It
 // returns an error only for values it can't repair, such as a bad proxy URL.
@@ -118,6 +144,7 @@ func (s *Settings) Normalize() error {
 			s.MiningBenefits[t] = true
 		}
 	}
+	s.AlertEvents = normalizeFlags(s.AlertEvents, AlertEvents)
 	s.ConnectionQuality = min(max(s.ConnectionQuality, 1), 6)
 	s.RefreshIntervalMinutes = min(max(s.RefreshIntervalMinutes, 5), 24*60)
 	s.Proxy = strings.TrimSpace(s.Proxy)
@@ -174,6 +201,16 @@ func preparePatch(patch []byte) ([]byte, error) {
 	delete(fields, "clear_telegram")
 	delete(fields, "clear_discord")
 	return json.Marshal(fields)
+}
+
+// normalizeFlags drops unknown keys and turns missing known keys on.
+func normalizeFlags(flags map[string]bool, known []string) map[string]bool {
+	out := make(map[string]bool, len(known))
+	for _, k := range known {
+		v, ok := flags[k]
+		out[k] = !ok || v
+	}
+	return out
 }
 
 func isBenefitType(t string) bool {

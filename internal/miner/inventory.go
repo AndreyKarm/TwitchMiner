@@ -55,7 +55,20 @@ func (m *Miner) fetchInventory(ctx context.Context) error {
 	m.catalogWarned = m.catalogWarned || warn
 	m.mu.Unlock()
 	if warn {
-		m.print("Twitch didn't share its campaign list with this login type, so only campaigns you've already started are visible.")
+		m.print("Twitch hides its campaign list from this login type, so campaigns for your listed games are found through their live channels.")
+	}
+	if catalog == nil {
+		m.setStatus("Looking for campaigns on live channels...")
+		discovered, err := m.discoverCampaigns(ctx, data)
+		if err != nil {
+			return err
+		}
+		for id, c := range discovered {
+			data[id] = c
+		}
+		if len(discovered) > 0 {
+			slog.Info("found campaigns on live channels", "campaigns", len(discovered))
+		}
 	}
 	var available []map[string]any
 	for _, raw := range asList(catalog) {
@@ -232,6 +245,11 @@ func (m *Miner) claimDrop(ctx context.Context, d *Drop) bool {
 		c := d.Campaign
 		claimedN, total := c.claimedCount()
 		m.print(fmt.Sprintf("Claimed drop: %s %s (%d/%d)", c.Game.Name, d.rewardsText(), claimedN, total))
+		claimed, completed := m.claimAlertsLocked(d)
+		go m.sendAlerts(config.AlertDropClaimed, claimed)
+		if completed != nil {
+			go m.sendAlerts(config.AlertCampaignCompleted, *completed)
+		}
 		// A claim can leave only unwanted rewards behind; let fallback games
 		// take over promptly.
 		m.requestGamesUpdateLocked()

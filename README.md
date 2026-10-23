@@ -58,9 +58,13 @@ approve. TwitchMiner saves the token in `data/auth.json` and renews it on its ow
 Treat that file like a password. **Settings → Log out of Twitch** forgets it.
 
 TwitchMiner logs in as Twitch's Android TV app, one of the few clients Twitch still
-allows for device-code login. Twitch may hide its full campaign list from this login
-type. If it does, the console says so, and only campaigns you've already started on
-Twitch can be mined.
+allows for device-code login. Twitch hides its campaign list from this login type, so
+TwitchMiner finds campaigns for the games on your watch list through their live
+channels. It asks each drops-enabled stream which campaigns it offers, and watches a
+channel that offers the campaign. These show as **found on stream** in Inventory.
+Twitch doesn't report whether your game account is linked for them, so check on
+Twitch. Games that aren't on your watch list can only be mined once you've started
+their campaign on Twitch.
 
 ## Use it
 
@@ -79,10 +83,18 @@ Twitch can be mined.
 - **Settings** chooses which reward types count, ignores drops by name, sets campaign
   alerts, and sets a proxy.
 
-### Campaign alerts
+### Alerts
 
-TwitchMiner can send a Telegram or Discord message when a drops campaign starts for a
-game you'd mine. Set it up in **Settings → Campaign alerts**, then use **Send test**:
+TwitchMiner can send Telegram or Discord messages. In **Settings → Alerts**, tick the
+events you want:
+
+- **Campaign started:** a new drops campaign for a game you'd mine.
+- **Drop received:** each reward the miner claims.
+- **Campaign completed:** every drop in a campaign is claimed.
+- **Login needed:** Twitch logged the miner out. The message includes the new
+  activation code, so you can log back in from your phone.
+
+All four are on by default. Then connect a channel and use **Send test**:
 
 - **Telegram:** create a bot with [@BotFather](https://t.me/BotFather) and paste its
   token. Message the bot once, then enter your chat ID, or add the bot to a channel
@@ -92,8 +104,9 @@ game you'd mine. Set it up in **Settings → Campaign alerts**, then use **Send 
 
 The token and webhook URL stay on the server; the dashboard only shows whether each is
 set. On the first run, campaigns that are already running are recorded without
-alerting, so you only hear about new ones. Alerts only cover campaigns Twitch shows
-this login (see [Log in](#log-in)).
+alerting, so you only hear about new ones. Campaign alerts only cover campaigns
+Twitch shows this login (see [Log in](#log-in)). Logging out yourself doesn't send a
+login alert.
 
 ## Docker
 

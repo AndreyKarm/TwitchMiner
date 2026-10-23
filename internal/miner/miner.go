@@ -105,6 +105,9 @@ type Miner struct {
 	policy             policy
 	state              State
 	paused             bool
+	hadSession         bool // logged in at least once since starting
+	userLogout         bool // the current logout was requested by the user
+	loginAlertSent     bool
 	inventoryPending   bool
 	gamesUpdatePending bool
 	inventoryLoaded    bool
@@ -179,7 +182,18 @@ func (m *Miner) showLogin(s twitch.LoginState) {
 	case "code":
 		m.setStatus("Waiting for Twitch login")
 		m.print(fmt.Sprintf("Log in by entering code %s at %s", s.UserCode, s.VerificationURI))
+		// Alert once when Twitch, not the user, ended a working session.
+		m.mu.Lock()
+		alert := m.hadSession && !m.userLogout && !m.loginAlertSent
+		m.loginAlertSent = m.loginAlertSent || alert
+		m.mu.Unlock()
+		if alert {
+			go m.sendAlerts(config.AlertLoginRequired, loginAlert(s.UserCode, s.VerificationURI))
+		}
 	case "logged_in":
+		m.mu.Lock()
+		m.userLogout, m.loginAlertSent = false, false
+		m.mu.Unlock()
 		m.print(fmt.Sprintf("Logged in as %s", s.Login))
 	case "error":
 		m.print(s.Error)
@@ -197,6 +211,7 @@ func (m *Miner) runSession(ctx context.Context) {
 	m.mu.Lock()
 	m.sctx, m.endSession, m.pool = sctx, cancel, pool
 	m.state = StateIdle
+	m.hadSession = true
 	m.mu.Unlock()
 
 	pool.Start(sctx)
@@ -345,6 +360,9 @@ func (m *Miner) Paused() bool {
 // Logout forgets the token; the miner falls back to the login screen.
 func (m *Miner) Logout() {
 	m.print("Logging out")
+	m.mu.Lock()
+	m.userLogout = true
+	m.mu.Unlock()
 	m.auth.Logout()
 }
 
@@ -428,7 +446,7 @@ func (m *Miner) stateLoop(ctx context.Context) {
 			m.restartWatchingLocked()
 			m.changeStateLocked(StateChannelsCleanup)
 			m.mu.Unlock()
-			go m.deliverAlerts(ctx, alerts, seen)
+			go m.deliverStarted(alerts, seen)
 
 		case StateChannelsCleanup:
 			m.setStatus("Cleaning up channels...")
