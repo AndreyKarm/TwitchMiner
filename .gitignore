@@ -1,5 +1,6 @@
 # Runtime data: settings and the Twitch login token
 /data/
+/.devdata/
 
 # Build output
 /twitchminer

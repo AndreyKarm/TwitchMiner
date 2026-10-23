@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "./cmd/twitchminer", "-open=false", "-addr", "127.0.0.1:8090"],
       "port": 8090,
       "autoPort": false
+    },
+    {
+      "name": "twitchminer-ui",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/twitchminer", "-open=false", "-addr", "127.0.0.1:8092", "-data", ".devdata"],
+      "port": 8092,
+      "autoPort": false
     }
   ]
 }
