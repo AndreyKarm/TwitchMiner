@@ -60,6 +60,17 @@ jobs:
           ldflags="-s -w -X github.com/AndreyKarm/TwitchMiner/internal/config.Version=${GITHUB_REF_NAME}"
           mkdir -p "dist/$name"
           if [ "$GOOS" = windows ]; then
+            # Embed the icon and version details, as build.bat does. The tools
+            # run on this machine, so drop the Windows target for them.
+            filever="${GITHUB_REF_NAME#v}"
+            filever="${filever%%-*}"
+            mkdir -p build
+            env -u GOOS -u GOARCH go run ./tools/genicon build/twitchminer.ico
+            env -u GOOS -u GOARCH go run github.com/tc-hib/go-winres@v0.3.3 simply \
+              --arch "$GOARCH" --out cmd/twitchminer/rsrc --icon build/twitchminer.ico \
+              --manifest gui --product-name TwitchMiner --file-description TwitchMiner \
+              --original-filename twitchminer.exe \
+              --product-version "$filever" --file-version "$filever"
             # The Windows build runs in the tray with no console window.
             go build -trimpath -ldflags "$ldflags -H=windowsgui" -o "dist/$name/twitchminer.exe" ./cmd/twitchminer
           else

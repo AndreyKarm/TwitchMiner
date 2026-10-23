@@ -42,14 +42,23 @@ saved in `./data`.
 | `-tray` | `TWITCHMINER_NO_TRAY` (set to disable) | on (Windows) | Show the tray icon |
 | `-v` | | off | Debug logging |
 
-To build a standalone binary:
+On Windows, run `build.bat` to build `dist\twitchminer.exe` with the app icon and
+version details embedded, as the tray app with no console window:
 
-```bash
-go build -o twitchminer.exe ./cmd/twitchminer
+```bat
+build.bat
 ```
 
-Add `-ldflags -H=windowsgui` on Windows to hide the console window, like the release
-builds do.
+`build.bat arm64` builds for Windows on ARM, and `build.bat console` keeps the
+console window so you can watch the log. They can be combined. The first run
+downloads the [go-winres](https://github.com/tc-hib/go-winres) resource tool through
+Go's module proxy.
+
+On other systems, or for a plain build without the icon:
+
+```bash
+go build -o twitchminer ./cmd/twitchminer
+```
 
 ## Log in
 

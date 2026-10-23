@@ -12,6 +12,7 @@ import (
 	"fyne.io/systray"
 	"golang.org/x/sys/windows"
 
+	"github.com/AndreyKarm/TwitchMiner/internal/icon"
 	"github.com/AndreyKarm/TwitchMiner/internal/miner"
 )
 
@@ -31,7 +32,7 @@ func runTray(opts trayOptions, m *miner.Miner, quit context.CancelFunc, done <-c
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	systray.Run(func() {
-		systray.SetIcon(trayIcon())
+		systray.SetIcon(icon.ICO(16, 32))
 		systray.SetTitle("TwitchMiner")
 		systray.SetTooltip("TwitchMiner")
 
