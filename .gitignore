@@ -1,0 +1,7 @@
+# Runtime data: settings and the Twitch login token
+/data/
+
+# Build output
+/twitchminer
+/twitchminer.exe
+/dist/

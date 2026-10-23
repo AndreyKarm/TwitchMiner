@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "twitchminer",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/twitchminer", "-open=false", "-addr", "127.0.0.1:8090"],
+      "port": 8090,
+      "autoPort": false
+    }
+  ]
+}

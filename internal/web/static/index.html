@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="color-scheme" content="dark">
+	<title>TwitchMiner</title>
+	<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap">
+	<link rel="stylesheet" href="/static/app.css">
+	<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+	<header class="topbar">
+		<div class="shell topbar-inner">
+			<a class="brand" href="/">
+				<img src="/static/favicon.svg" alt="" width="26" height="26">
+				<span>TwitchMiner</span>
+			</a>
+			<nav class="tabs" id="tabs" role="tablist" aria-label="Sections" hidden>
+				<button class="tab" role="tab" data-tab="main" aria-selected="true">Dashboard</button>
+				<button class="tab" role="tab" data-tab="inventory" aria-selected="false">Inventory</button>
+				<button class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+			</nav>
+			<div class="topbar-right">
+				<span class="conn" id="conn" title="Dashboard connection"><span class="dot"></span><span id="conn-text">Connecting</span></span>
+				<span class="pubsub muted" id="pubsub" title="Twitch PubSub connections"></span>
+				<span class="account" id="account" hidden></span>
+			</div>
+		</div>
+	</header>
+
+	<main class="shell">
+		<div class="statusbar">
+			<span class="status" id="status">Starting...</span>
+			<span class="pill pill-manual" id="manual" hidden>
+				<span id="manual-text"></span>
+				<button class="link-button" id="manual-exit" type="button">Back to auto</button>
+			</span>
+		</div>
+
+		<section id="login-view" class="login-view" hidden>
+			<div class="container">
+				<div class="card login-card" id="login-card"></div>
+			</div>
+		</section>
+
+		<section id="tab-main" class="tab-panel" role="tabpanel" hidden>
+			<div class="grid">
+				<div class="col">
+					<article class="panel">
+						<h2>Now mining</h2>
+						<div id="progress"></div>
+					</article>
+					<article class="panel">
+						<div class="panel-head">
+							<h2>Mining queue</h2>
+							<span class="muted small" id="wanted-count"></span>
+						</div>
+						<div id="wanted"></div>
+					</article>
+					<article class="panel">
+						<h2>Console</h2>
+						<div class="console" id="console" role="log" aria-live="polite"></div>
+					</article>
+				</div>
+				<div class="col">
+					<article class="panel panel-channels">
+						<div class="panel-head">
+							<h2>Channels</h2>
+							<span class="muted small" id="channels-count"></span>
+						</div>
+						<p class="hint">Click a channel to watch it. Picking another game switches to manual mode.</p>
+						<div class="channel-list" id="channels"></div>
+					</article>
+				</div>
+			</div>
+		</section>
+
+		<section id="tab-inventory" class="tab-panel" role="tabpanel" hidden>
+			<div class="toolbar">
+				<div class="chips" id="inv-status" role="group" aria-label="Status filter">
+					<button class="chip" data-status="all">All</button>
+					<button class="chip" data-status="active">Active</button>
+					<button class="chip" data-status="upcoming">Upcoming</button>
+					<button class="chip" data-status="mining">Still mining</button>
+					<button class="chip" data-status="finished">Finished</button>
+				</div>
+				<div class="toolbar-right">
+					<select id="inv-link" aria-label="Account link filter">
+						<option value="all">Any link status</option>
+						<option value="linked">Linked</option>
+						<option value="not_linked">Not linked</option>
+					</select>
+					<input id="inv-search" type="search" placeholder="Search games or campaigns" aria-label="Search">
+				</div>
+			</div>
+			<p class="muted small" id="inv-count"></p>
+			<div class="campaign-grid" id="inventory"></div>
+		</section>
+
+		<section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
+			<div class="settings">
+				<article class="panel">
+					<h2>Games to watch</h2>
+					<p class="hint">Mined from top to bottom. Use the arrows to change priority.</p>
+					<ol class="game-list" id="games"></ol>
+					<form class="inline-form" id="game-add">
+						<input id="game-input" list="games-available" placeholder="Add a game" autocomplete="off" aria-label="Game name">
+						<datalist id="games-available"></datalist>
+						<button type="submit">Add</button>
+					</form>
+					<button class="btn-ghost small-btn" id="games-add-all" type="button">Add every game with a campaign</button>
+					<label class="toggle">
+						<input type="checkbox" id="priority-only">
+						<span class="toggle-track"></span>
+						<span class="toggle-label">
+							Only mine games on this list
+							<small>When off, other eligible games are mined after the listed ones run out.</small>
+						</span>
+					</label>
+				</article>
+
+				<article class="panel">
+					<h2>Rewards</h2>
+					<p class="hint">Only drops with these reward types are mined.</p>
+					<div class="check-grid" id="benefits"></div>
+					<label class="toggle">
+						<input type="checkbox" id="allow-unlinked">
+						<span class="toggle-track"></span>
+						<span class="toggle-label">
+							Mine campaigns with no linked game account
+							<small class="warn">Twitch may not award these rewards until you link the account. Check your progress on Twitch.</small>
+						</span>
+					</label>
+				</article>
+
+				<article class="panel">
+					<h2>Ignored drops</h2>
+					<p class="hint">One word or phrase per line. Drops whose names contain any of them, and drops that depend on them, are skipped.</p>
+					<textarea id="blacklist" rows="5" spellcheck="false" placeholder="e.g. Skin"></textarea>
+					<div class="row-end"><button type="button" id="blacklist-save">Save</button></div>
+				</article>
+
+				<article class="panel">
+					<h2>Connection</h2>
+					<div class="field-grid">
+						<label class="field">
+							<span>Reload inventory every (minutes)</span>
+							<input type="number" id="refresh" min="5" max="1440" step="1">
+						</label>
+						<label class="field">
+							<span>Connection quality</span>
+							<select id="quality">
+								<option value="1">1 – fast connection</option>
+								<option value="2">2</option>
+								<option value="3">3</option>
+								<option value="4">4</option>
+								<option value="5">5</option>
+								<option value="6">6 – very slow connection</option>
+							</select>
+						</label>
+						<label class="field field-wide">
+							<span>Proxy (optional)</span>
+							<input type="text" id="proxy" placeholder="http://host:port or socks5://host:port" spellcheck="false">
+						</label>
+					</div>
+					<div class="row-end"><button type="button" id="connection-save">Save</button></div>
+				</article>
+
+				<article class="panel">
+					<h2>Account</h2>
+					<p id="account-detail" class="hint"></p>
+					<div class="button-row">
+						<button type="button" class="btn-ghost" id="reload">Reload inventory</button>
+						<button type="button" class="btn-danger" id="logout">Log out of Twitch</button>
+					</div>
+					<p class="muted small" id="version"></p>
+				</article>
+			</div>
+		</section>
+	</main>
+
+	<div class="toasts" id="toasts" aria-live="polite"></div>
+	<script src="/static/app.js"></script>
+</body>
+</html>
