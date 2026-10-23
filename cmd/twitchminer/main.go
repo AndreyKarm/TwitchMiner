@@ -37,11 +37,15 @@ func run() error {
 	open := flag.Bool("open", os.Getenv("TWITCHMINER_NO_BROWSER") == "", "open the dashboard in a browser on start")
 	verbose := flag.Bool("v", false, "verbose logging")
 	version := flag.Bool("version", false, "print the version and exit")
+	healthcheck := flag.Bool("healthcheck", false, "check that a running dashboard on -addr responds, then exit")
 	flag.Parse()
 
 	if *version {
 		fmt.Println(config.Version)
 		return nil
+	}
+	if *healthcheck {
+		return checkHealth(*addr)
 	}
 	level := slog.LevelInfo
 	if *verbose {
@@ -96,6 +100,28 @@ func run() error {
 	defer cancel()
 	srv.Shutdown(shutdownCtx)
 	return settings.Save()
+}
+
+// checkHealth is used by container health checks, since the runtime image
+// has no curl or shell.
+func checkHealth(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {

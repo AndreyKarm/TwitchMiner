@@ -1,0 +1,22 @@
+# Build and start the miner:   docker compose up -d --build
+# Follow the logs:             docker compose logs -f
+# Stop it:                     docker compose down
+#
+# Set TWITCHMINER_PORT to use another host port, for example when 8080 is
+# taken: TWITCHMINER_PORT=8091 docker compose up -d --build
+services:
+  twitchdropsminer:
+    build:
+      context: .
+      args:
+        VERSION: ${TWITCHMINER_VERSION:-dev}
+    image: twitchminer:local
+    container_name: twitchdropsminer
+    ports:
+      - "${TWITCHMINER_PORT:-8080}:8080"
+    volumes:
+      # Settings and the Twitch login token. Keep this folder private, and
+      # don't run a second miner against the same folder.
+      - ${TWITCHMINER_DATA_DIR:-./data}:/data
+    restart: unless-stopped
+    stop_grace_period: 15s

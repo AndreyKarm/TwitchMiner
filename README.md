@@ -54,10 +54,23 @@ Twitch can be mined.
 
 ## Docker
 
+Build and start it with Docker Compose:
+
 ```bash
-docker build -t twitchminer .
-docker run -d --name twitchminer -p 8080:8080 -v ./data:/data --restart unless-stopped twitchminer
+docker compose up -d --build
 ```
+
+The dashboard is at <http://localhost:8080>, and settings and the login are kept in
+`./data`. To use another host port, set `TWITCHMINER_PORT`, for example
+`TWITCHMINER_PORT=8091 docker compose up -d --build`. To use another data folder, set
+`TWITCHMINER_DATA_DIR`. Run `docker compose logs -f` to follow the log and
+`docker compose down` to stop it.
+
+Don't run a second miner, such as `go run`, against the same data folder at the same
+time; both would mine on the same account.
+
+On Linux, the container runs as the distroless `nonroot` user (UID 65532), so give it
+the data folder first: `mkdir -p data && sudo chown 65532:65532 data`.
 
 The dashboard has no password yet. Only expose it on a network you trust.
 
