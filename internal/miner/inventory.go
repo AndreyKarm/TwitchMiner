@@ -53,6 +53,7 @@ func (m *Miner) fetchInventory(ctx context.Context) error {
 	m.mu.Lock()
 	warn := catalog == nil && !m.catalogWarned
 	m.catalogWarned = m.catalogWarned || warn
+	m.catalogHidden = catalog == nil
 	m.mu.Unlock()
 	if warn {
 		m.print("Twitch hides its campaign list from this login type, so campaigns for your listed games are found through their live channels.")
@@ -128,6 +129,7 @@ func (m *Miner) fetchInventory(ctx context.Context) error {
 			triggers = append(triggers, c.timeTriggers()...)
 		}
 	}
+	m.relinkProgressLocked()
 	slices.SortFunc(triggers, time.Time.Compare)
 	triggers = slices.CompactFunc(triggers, time.Time.Equal)
 	now := time.Now()
@@ -236,7 +238,9 @@ func (m *Miner) claimDrop(ctx context.Context, d *Drop) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !ok {
-		slog.Error("drop claim may have failed", "drop", d.ID, "err", err)
+		// Early claims can fail until Twitch registers the last minute; the
+		// next progress update or drop-claim event retries.
+		slog.Warn("drop not claimed yet", "drop", d.Name, "err", err)
 		return false
 	}
 	if !d.IsClaimed {
@@ -275,10 +279,65 @@ func (m *Miner) updateDropMinutesLocked(d *Drop, minutes int) {
 			}
 		}
 	}
+	m.claimReadyLocked(d.Campaign)
 	// Progress can arrive while idle, for example from a browser watching on
 	// the same account; only show it while the miner itself is watching.
 	if fd := d.Campaign.FirstDrop(); fd != nil && m.watching != nil {
 		m.displayDropLocked(fd)
+	}
+}
+
+// relinkProgressLocked points the progress card at the freshly loaded copy
+// of its drop, so a reload neither blanks it nor leaves it showing stale
+// minutes.
+func (m *Miner) relinkProgressLocked() {
+	if m.progress == nil {
+		return
+	}
+	if d := m.drops[m.progress.drop.ID]; d != nil {
+		m.progress = &progressState{drop: d, at: m.progress.at}
+	} else {
+		m.progress = nil
+	}
+	m.dirty |= dirtyProgress
+}
+
+// claimRetry spaces out claim attempts for a drop Twitch may not consider
+// finished yet.
+const claimRetry = 2 * time.Minute
+
+// readyToClaimLocked returns watch drops Twitch reports as fully watched
+// but that aren't claimed, giving each a claim ID if Twitch hasn't sent one.
+// Claim IDs are built as userID#campaignID#dropID, like the original miner.
+// A drop is returned at most once per claimRetry.
+func (m *Miner) readyToClaimLocked(c *Campaign, userID string, now time.Time) []*Drop {
+	var ready []*Drop
+	for _, d := range c.watchDrops() {
+		if d.IsClaimed || d.RealMinutes < d.RequiredMinutes {
+			continue
+		}
+		if next, ok := m.claimAttempts[d.ID]; ok && now.Before(next) {
+			continue
+		}
+		if m.claimAttempts == nil {
+			m.claimAttempts = map[string]time.Time{}
+		}
+		m.claimAttempts[d.ID] = now.Add(claimRetry)
+		if d.ClaimID == "" && userID != "" {
+			d.ClaimID = userID + "#" + c.ID + "#" + d.ID
+		}
+		ready = append(ready, d)
+	}
+	return ready
+}
+
+// claimReadyLocked claims finished drops without waiting for Twitch's
+// drop-claim event, which can be missed. A successful claim queues a games
+// update, which moves on to the next drop.
+func (m *Miner) claimReadyLocked(c *Campaign) {
+	ctx := m.sctx
+	for _, d := range m.readyToClaimLocked(c, m.auth.UserID(), time.Now()) {
+		go m.claimDrop(ctx, d)
 	}
 }
 
@@ -310,9 +369,22 @@ func (m *Miner) restartMaintenance(ctx context.Context) {
 	}
 	mctx, cancel := context.WithCancel(ctx)
 	m.mntCancel = cancel
-	interval := time.Duration(m.policy.refreshMinutes) * time.Minute
+	interval := m.reloadIntervalLocked()
 	m.mu.Unlock()
 	go m.maintenance(mctx, interval)
+}
+
+// idleDiscoveryInterval is how often to look for new campaigns while there's
+// nothing to mine and Twitch hides the campaign list, so new campaigns are
+// picked up soon after they start.
+const idleDiscoveryInterval = 10 * time.Minute
+
+func (m *Miner) reloadIntervalLocked() time.Duration {
+	interval := time.Duration(m.policy.refreshMinutes) * time.Minute
+	if m.catalogHidden && len(m.wantedTreeLocked()) == 0 {
+		interval = min(interval, idleDiscoveryInterval)
+	}
+	return interval
 }
 
 func (m *Miner) maintenance(ctx context.Context, interval time.Duration) {

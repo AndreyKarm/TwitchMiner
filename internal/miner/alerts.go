@@ -45,6 +45,10 @@ func (s *seenCampaigns) save(snapshot map[string]time.Time) {
 	}
 }
 
+// startedAlertWindow is how recently a campaign must have started to be
+// announced as started.
+const startedAlertWindow = 24 * time.Hour
+
 // collectStartedLocked marks every active campaign as seen and returns an
 // alert for each newly started one the user would mine. The first run only
 // records what's already running.
@@ -64,7 +68,9 @@ func (m *Miner) collectStartedLocked() (alerts []notify.Message, snapshot map[st
 		}
 		seen.ids[c.ID] = c.EndsAt
 		changed = true
-		if !seeding && m.wouldMineLocked(c) {
+		// A campaign seen for the first time can be old, for example after
+		// adding its game to the watch list; that isn't news.
+		if !seeding && m.wouldMineLocked(c) && time.Since(c.StartsAt) < startedAlertWindow {
 			alerts = append(alerts, m.campaignAlertLocked(c))
 		}
 	}

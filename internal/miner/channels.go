@@ -321,6 +321,10 @@ func (m *Miner) onDropClaimable(dropID, instanceID string) {
 	defer m.mu.Unlock()
 	if d.Campaign.CanEarn(m.watching) {
 		m.restartWatchingLocked()
+		// Show the next drop instead of the one just claimed.
+		if fd := d.Campaign.FirstDrop(); fd != nil && m.watching != nil {
+			m.displayDropLocked(fd)
+		}
 	} else {
 		m.inventoryPending = true
 		signal(m.stateCh)

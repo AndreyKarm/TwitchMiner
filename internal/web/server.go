@@ -35,7 +35,16 @@ func NewServer(hub *Hub, m *miner.Miner, settings *config.Store) *Server {
 		http.ServeFileFS(w, r, static, "index.html")
 	})
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", noCache(http.FileServerFS(static))))
-	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
+	// 503 when the miner has stopped working, so container health reflects
+	// the miner and not just this web server.
+	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		h := s.miner.Health()
+		status := http.StatusOK
+		if !h.OK {
+			status = http.StatusServiceUnavailable
+		}
+		writeJSON(w, status, h)
+	})
 	s.mux.HandleFunc("GET /api/events", s.events)
 	s.mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.settings.Get().Public())

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"path/filepath"
 	"slices"
@@ -66,6 +67,18 @@ func newPolicy(s config.Settings) policy {
 	}
 }
 
+// sameMining reports whether p and o pick the same games and drops, so a
+// settings save that only touches alerts or connection details doesn't
+// restart mining.
+func (p policy) sameMining(o policy) bool {
+	return slices.Equal(p.games, o.games) &&
+		p.priorityOnly == o.priorityOnly &&
+		p.endingSoonest == o.endingSoonest &&
+		maps.Equal(p.benefits, o.benefits) &&
+		p.keywordKey == o.keywordKey &&
+		p.allowUnlinked == o.allowUnlinked
+}
+
 type dirtyFlags uint8
 
 const (
@@ -103,6 +116,8 @@ type Miner struct {
 
 	mu                 sync.Mutex
 	policy             policy
+	netQuality         int
+	netProxy           string
 	state              State
 	paused             bool
 	hadSession         bool // logged in at least once since starting
@@ -111,6 +126,11 @@ type Miner struct {
 	inventoryPending   bool
 	gamesUpdatePending bool
 	inventoryLoaded    bool
+	inventoryFailures  int
+	lastInventoryOK    time.Time
+	sessionStarted     time.Time
+	catalogHidden      bool
+	claimAttempts      map[string]time.Time
 	catalogWarned      bool
 	inventory          []*Campaign
 	campaigns          map[string]*Campaign
@@ -134,7 +154,10 @@ type Miner struct {
 // New wires a miner that keeps its own state files in dataDir. Call Run to
 // start it.
 func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI, dataDir string) *Miner {
+	initial := settings.Get()
 	m := &Miner{
+		netQuality:   initial.ConnectionQuality,
+		netProxy:     initial.Proxy,
 		settings:     settings,
 		http:         h,
 		auth:         auth,
@@ -144,7 +167,7 @@ func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI, dataD
 		stateCh:      make(chan struct{}, 1),
 		watchCh:      make(chan struct{}, 1),
 		watchRestart: make(chan struct{}, 1),
-		policy:       newPolicy(settings.Get()),
+		policy:       newPolicy(initial),
 		campaigns:    map[string]*Campaign{},
 		drops:        map[string]*Drop{},
 		channels:     map[string]*Channel{},
@@ -212,6 +235,7 @@ func (m *Miner) runSession(ctx context.Context) {
 	m.sctx, m.endSession, m.pool = sctx, cancel, pool
 	m.state = StateIdle
 	m.hadSession = true
+	m.sessionStarted = time.Now()
 	m.mu.Unlock()
 
 	pool.Start(sctx)
@@ -257,6 +281,9 @@ func (m *Miner) resetSession() {
 	m.triggers = nil
 	m.progress = nil
 	m.inventoryLoaded = false
+	m.inventoryFailures = 0
+	m.catalogHidden = false
+	m.claimAttempts = nil
 	m.catalogWarned = false
 	m.inventoryPending = false
 	m.gamesUpdatePending = false
@@ -289,16 +316,33 @@ func (m *Miner) requestGamesUpdateLocked() {
 	signal(m.stateCh)
 }
 
-// SettingsChanged applies new settings to the running miner.
+// SettingsChanged applies new settings to the running miner. Only changes
+// that affect what's mined trigger a recalculation, and only connection
+// changes rebuild the HTTP client, so saving unrelated settings never
+// interrupts watching.
 func (m *Miner) SettingsChanged(s config.Settings) {
-	if err := m.http.Configure(s.ConnectionQuality, s.Proxy); err != nil {
-		m.print("Could not apply connection settings: " + err.Error())
-	}
 	m.mu.Lock()
-	m.policy = newPolicy(s)
-	m.dirty |= dirtyInventory | dirtyWanted
-	m.requestGamesUpdateLocked()
+	netChanged := s.ConnectionQuality != m.netQuality || s.Proxy != m.netProxy
+	m.netQuality, m.netProxy = s.ConnectionQuality, s.Proxy
+	next := newPolicy(s)
+	miningChanged := !m.policy.sameMining(next)
+	refreshChanged := next.refreshMinutes != m.policy.refreshMinutes
+	m.policy = next
+	if miningChanged {
+		m.dirty |= dirtyInventory | dirtyWanted
+		m.requestGamesUpdateLocked()
+	}
+	sctx, loaded := m.sctx, m.inventoryLoaded
 	m.mu.Unlock()
+
+	if netChanged {
+		if err := m.http.Configure(s.ConnectionQuality, s.Proxy); err != nil {
+			m.print("Could not apply connection settings: " + err.Error())
+		}
+	}
+	if refreshChanged && loaded {
+		m.restartMaintenance(sctx)
+	}
 	m.ui.Publish("settings", s.Public())
 }
 
@@ -422,17 +466,13 @@ func (m *Miner) stateLoop(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				m.print("Loading the drops inventory failed, retrying in a minute: " + err.Error())
-				m.changeState(StateIdle)
-				go func() {
-					if twitch.Sleep(ctx, time.Minute) == nil {
-						m.RequestInventoryRefresh()
-					}
-				}()
+				m.inventoryFailed(ctx, err)
 				break
 			}
 			m.mu.Lock()
 			m.inventoryLoaded = true
+			m.inventoryFailures = 0
+			m.lastInventoryOK = time.Now()
 			m.changeStateLocked(StateGamesUpdate)
 			m.mu.Unlock()
 
@@ -482,14 +522,44 @@ func (m *Miner) stateLoop(ctx context.Context) {
 	}
 }
 
+// inventoryRetryDelay backs off 1, 2, 4, 8 and then 15 minutes.
+func inventoryRetryDelay(failures int) time.Duration {
+	return min(time.Minute<<min(max(failures-1, 0), 4), 15*time.Minute)
+}
+
+// inventoryFailed schedules a retry. With an inventory already loaded the
+// miner keeps watching on what it knows, so a network blip doesn't stop
+// mining.
+func (m *Miner) inventoryFailed(ctx context.Context, err error) {
+	m.mu.Lock()
+	m.inventoryFailures++
+	delay := inventoryRetryDelay(m.inventoryFailures)
+	if m.inventoryLoaded {
+		m.changeStateLocked(StateChannelSwitch)
+	} else {
+		m.changeStateLocked(StateIdle)
+	}
+	m.mu.Unlock()
+	m.print(fmt.Sprintf("Loading the drops inventory failed, retrying in %d min: %v", int(delay.Minutes()), err))
+	go func() {
+		if twitch.Sleep(ctx, delay) == nil {
+			m.RequestInventoryRefresh()
+		}
+	}()
+}
+
 // claimAvailable claims every finished drop of started campaigns.
 func (m *Miner) claimAvailable(ctx context.Context) {
 	m.mu.Lock()
 	var claimable []*Drop
+	uid := m.auth.UserID()
+	now := time.Now()
 	for _, c := range m.inventory {
 		if c.Upcoming() {
 			continue
 		}
+		// Fully watched drops Twitch hasn't given a claim ID get one built.
+		m.readyToClaimLocked(c, uid, now)
 		for _, d := range c.Drops {
 			if d.CanClaim() {
 				claimable = append(claimable, d)
@@ -906,10 +976,9 @@ func (m *Miner) stopWatchingLocked() {
 	m.progress = nil
 }
 
-// restartWatchingLocked makes the watch loop poll again right away.
+// restartWatchingLocked makes the watch loop poll again right away. The
+// progress card stays; stopWatchingLocked clears it when watching ends.
 func (m *Miner) restartWatchingLocked() {
-	m.progress = nil
-	m.dirty |= dirtyProgress
 	signal(m.watchRestart)
 }
 

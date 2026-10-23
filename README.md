@@ -128,6 +128,11 @@ time; both would mine on the same account.
 On Linux, the container runs as the distroless `nonroot` user (UID 65532), so give it
 the data folder first: `mkdir -p data && sudo chown 65532:65532 data`.
 
+The container's health check uses `/healthz`. It returns the miner's state as JSON,
+for example `mining`, `idle`, `paused` or `waiting_for_login`. It answers 503 when
+the miner is logged in but the inventory has stopped loading: none in the first 10
+minutes, or no successful reload for three reload intervals.
+
 The dashboard has no password yet. Only expose it on a network you trust.
 
 ## Development
