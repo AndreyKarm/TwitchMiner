@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,48 @@ func TestStorePatchValidatesAndPersists(t *testing.T) {
 	}
 	if got := reloaded.Get().GamesToWatch; !slices.Equal(got, s.GamesToWatch) {
 		t.Fatalf("persisted games = %v", got)
+	}
+}
+
+func TestSecretsStayServerSide(t *testing.T) {
+	st, err := LoadStore(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abc"
+	const hook = "https://discord.com/api/webhooks/123/abc-DEF_1"
+	if _, err := st.Patch([]byte(`{"telegram_bot_token":"` + token + `","telegram_chat_id":"-100123","discord_webhook_url":"` + hook + `"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	pub := st.Get().Public()
+	if pub.TelegramBotToken != "" || pub.DiscordWebhookURL != "" {
+		t.Fatal("Public must blank the secrets")
+	}
+	if !pub.TelegramConfigured || !pub.DiscordConfigured || pub.TelegramChatID != "-100123" {
+		t.Fatalf("Public flags wrong: %+v", pub)
+	}
+
+	// A form that sends blank secrets keeps the saved ones.
+	s, err := st.Patch([]byte(`{"telegram_bot_token":"","discord_webhook_url":"","telegram_chat_id":"@drops_chan"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TelegramBotToken != token || s.DiscordWebhookURL != hook || s.TelegramChatID != "@drops_chan" {
+		t.Fatalf("blank secrets should be kept: %+v", s)
+	}
+
+	s, err = st.Patch([]byte(`{"clear_discord":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.DiscordWebhookURL != "" || s.TelegramBotToken != token {
+		t.Fatal("clear_discord should remove only the webhook")
+	}
+
+	_, err = st.Patch([]byte(`{"discord_webhook_url":"https://evil.example/api/webhooks/1/x"}`))
+	if err == nil || strings.Contains(err.Error(), "evil") {
+		t.Fatalf("bad webhook must be rejected without echoing it, got %v", err)
 	}
 }
 

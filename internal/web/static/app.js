@@ -220,6 +220,7 @@ function renderLogin() {
 		);
 	}
 	renderVisibility();
+	renderPaused();
 }
 
 function tickLogin() {
@@ -563,11 +564,71 @@ function renderSettings(force = false) {
 	setField('#refresh', s.minimum_refresh_interval_minutes);
 	setField('#quality', s.connection_quality);
 	setField('#proxy', s.proxy);
+	setField('#telegram-chat', s.telegram_chat_id);
+
+	// The server never sends secrets back; it only says whether they're set.
+	const alertState = (id, on) => {
+		const tag = $(id);
+		tag.textContent = on ? 'on' : 'off';
+		tag.className = on ? 'tag tag-green' : 'tag';
+	};
+	alertState('#telegram-state', s.telegram_configured);
+	alertState('#discord-state', s.discord_configured);
+	$('#telegram-token').placeholder = s.telegram_token_set ? 'Saved. Leave blank to keep it.' : '123456789:ABC-DEF...';
+	$('#discord-webhook').placeholder = s.discord_configured ? 'Saved. Leave blank to keep it.' : 'https://discord.com/api/webhooks/...';
+	$('#telegram-test').disabled = !s.telegram_configured;
+	$('#telegram-clear').disabled = !s.telegram_token_set && !s.telegram_chat_id;
+	$('#discord-test').disabled = !s.discord_configured;
+	$('#discord-clear').disabled = !s.discord_configured;
 }
 
-for (const sel of ['#blacklist', '#refresh', '#quality', '#proxy']) {
+for (const sel of ['#blacklist', '#refresh', '#quality', '#proxy', '#telegram-chat']) {
 	$(sel).addEventListener('input', (e) => { e.target.dataset.dirty = '1'; });
 }
+
+// ---------- campaign alerts ----------
+
+$('#telegram-save').addEventListener('click', async () => {
+	const token = $('#telegram-token');
+	await saveSettings({ telegram_bot_token: token.value.trim(), telegram_chat_id: $('#telegram-chat').value.trim() }, 'Telegram settings saved');
+	token.value = '';
+});
+
+$('#discord-save').addEventListener('click', async () => {
+	const hook = $('#discord-webhook');
+	await saveSettings({ discord_webhook_url: hook.value.trim() }, 'Discord webhook saved');
+	hook.value = '';
+});
+
+$('#telegram-clear').addEventListener('click', () => saveSettings({ clear_telegram: true }, 'Telegram alerts removed'));
+$('#discord-clear').addEventListener('click', () => saveSettings({ clear_discord: true }, 'Discord alerts removed'));
+
+for (const target of ['telegram', 'discord']) {
+	$(`#${target}-test`).addEventListener('click', async (e) => {
+		const btn = e.currentTarget;
+		btn.disabled = true;
+		try {
+			await api('/api/alerts/test', { target });
+			toast(`Test alert sent to ${target === 'telegram' ? 'Telegram' : 'Discord'}`);
+		} catch (err) {
+			toast(err.message, true);
+		} finally {
+			btn.disabled = false;
+		}
+	});
+}
+
+// ---------- pause ----------
+
+function renderPaused() {
+	const btn = $('#pause');
+	btn.hidden = !loggedIn();
+	btn.textContent = state.paused ? 'Resume mining' : 'Pause';
+	btn.classList.toggle('btn-paused', !!state.paused);
+}
+
+$('#pause').addEventListener('click', () =>
+	api('/api/pause', { paused: !state.paused }).catch((err) => toast(err.message, true)));
 
 $('#allow-unlinked').addEventListener('change', (e) => saveSettings({ allow_unlinked_campaigns: e.target.checked }));
 
@@ -716,6 +777,10 @@ function renderGamesTab() {
 	// Keep keyboard focus on the same handle when the list is redrawn.
 	const focused = document.activeElement?.closest?.('#games .game-row')?.dataset.index;
 	$('#priority-only').checked = state.settings.priority_list_only;
+	$('#ending-soonest').checked = state.settings.priority_ending_soonest;
+	$('#watch-hint').textContent = state.settings.priority_ending_soonest
+		? 'Games are mined by whichever campaign ends soonest. Drag to set the order used for ties.'
+		: 'Mined from top to bottom. Drag a game to change its priority.';
 	$('#watch-count').textContent = list.length ? plural(list.length, 'game') : '';
 	$('#games').replaceChildren(
 		...(list.length
@@ -837,6 +902,7 @@ $('#games-add-all').addEventListener('click', () => {
 });
 
 $('#priority-only').addEventListener('change', (e) => saveSettings({ priority_list_only: e.target.checked }));
+$('#ending-soonest').addEventListener('change', (e) => saveSettings({ priority_ending_soonest: e.target.checked }));
 
 // ---------- game search (combobox) ----------
 
@@ -973,6 +1039,7 @@ const renderers = {
 	wanted: renderWanted,
 	manual: renderManual,
 	games: renderGamesTab,
+	paused: renderPaused,
 	pubsub: renderPubsub,
 	version: () => { $('#version').textContent = `TwitchMiner ${state.version}`; },
 };

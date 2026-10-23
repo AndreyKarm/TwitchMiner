@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -33,7 +34,43 @@ type Settings struct {
 	RefreshIntervalMinutes int `json:"minimum_refresh_interval_minutes"`
 	// Proxy is an optional http(s) or socks5 proxy URL.
 	Proxy string `json:"proxy"`
+	// PriorityEndingSoonest orders the listed games by their soonest-ending
+	// campaign instead of by list position.
+	PriorityEndingSoonest bool `json:"priority_ending_soonest"`
+	// Telegram and Discord receive an alert when a campaign starts. The bot
+	// token and webhook URL are secrets and never leave the server.
+	TelegramBotToken  string `json:"telegram_bot_token"`
+	TelegramChatID    string `json:"telegram_chat_id"`
+	DiscordWebhookURL string `json:"discord_webhook_url"`
 }
+
+// PublicSettings is what the dashboard sees: secrets are blanked and
+// replaced by flags saying whether they're set.
+type PublicSettings struct {
+	Settings
+	TelegramTokenSet   bool `json:"telegram_token_set"`
+	TelegramConfigured bool `json:"telegram_configured"`
+	DiscordConfigured  bool `json:"discord_configured"`
+}
+
+// Public returns the settings with secrets removed.
+func (s Settings) Public() PublicSettings {
+	p := PublicSettings{
+		Settings:           s.Clone(),
+		TelegramTokenSet:   s.TelegramBotToken != "",
+		TelegramConfigured: s.TelegramBotToken != "" && s.TelegramChatID != "",
+		DiscordConfigured:  s.DiscordWebhookURL != "",
+	}
+	p.TelegramBotToken = ""
+	p.DiscordWebhookURL = ""
+	return p
+}
+
+var (
+	telegramTokenPattern  = regexp.MustCompile(`^\d+:[A-Za-z0-9_-]{20,}$`)
+	telegramChatPattern   = regexp.MustCompile(`^(-?\d+|@[A-Za-z0-9_]{4,})$`)
+	discordWebhookPattern = regexp.MustCompile(`^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]+$`)
+)
 
 // Defaults returns the settings used for a fresh install.
 func Defaults() Settings {
@@ -95,7 +132,48 @@ func (s *Settings) Normalize() error {
 			return fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
 	}
+	// Errors below never repeat the submitted values, which may be secrets.
+	s.TelegramBotToken = strings.TrimSpace(s.TelegramBotToken)
+	s.TelegramChatID = strings.TrimSpace(s.TelegramChatID)
+	s.DiscordWebhookURL = strings.TrimSpace(s.DiscordWebhookURL)
+	if s.TelegramBotToken != "" && !telegramTokenPattern.MatchString(s.TelegramBotToken) {
+		return errors.New("that doesn't look like a Telegram bot token (it should be like 123456:ABC-DEF...)")
+	}
+	if s.TelegramChatID != "" && !telegramChatPattern.MatchString(s.TelegramChatID) {
+		return errors.New("the Telegram chat ID should be a number or an @channel name")
+	}
+	if s.DiscordWebhookURL != "" && !discordWebhookPattern.MatchString(s.DiscordWebhookURL) {
+		return errors.New("the Discord webhook should be a https://discord.com/api/webhooks/... URL")
+	}
 	return nil
+}
+
+// secretFields are kept as they are when a patch sends them blank, so the
+// dashboard can save other fields without knowing the secrets.
+var secretFields = []string{"telegram_bot_token", "discord_webhook_url"}
+
+// preparePatch drops blank secrets from a patch and expands the
+// clear_telegram and clear_discord actions.
+func preparePatch(patch []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &fields); err != nil {
+		return nil, err
+	}
+	for _, key := range secretFields {
+		if v, ok := fields[key]; ok && (string(v) == `""` || string(v) == "null") {
+			delete(fields, key)
+		}
+	}
+	if string(fields["clear_telegram"]) == "true" {
+		fields["telegram_bot_token"] = json.RawMessage(`""`)
+		fields["telegram_chat_id"] = json.RawMessage(`""`)
+	}
+	if string(fields["clear_discord"]) == "true" {
+		fields["discord_webhook_url"] = json.RawMessage(`""`)
+	}
+	delete(fields, "clear_telegram")
+	delete(fields, "clear_discord")
+	return json.Marshal(fields)
 }
 
 func isBenefitType(t string) bool {
@@ -144,9 +222,14 @@ func LoadStore(path string) (*Store, error) {
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, err
 	}
+	// A hand-edited bad value shouldn't stop the miner from starting; drop
+	// the optional fields that can fail validation.
 	if err := s.Normalize(); err != nil {
-		// A broken proxy shouldn't stop the miner from starting.
 		s.Proxy = ""
+		if err := s.Normalize(); err != nil {
+			s.TelegramBotToken, s.TelegramChatID, s.DiscordWebhookURL = "", "", ""
+			s.Normalize()
+		}
 	}
 	return &Store{path: path, s: s}, nil
 }
@@ -165,8 +248,12 @@ func (st *Store) Patch(patch []byte) (Settings, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	next := st.s.Clone()
+	patch, err := preparePatch(patch)
+	if err != nil {
+		return st.s.Clone(), errors.New("invalid settings: expected a JSON object")
+	}
 	if err := json.Unmarshal(patch, &next); err != nil {
-		return st.s.Clone(), fmt.Errorf("invalid settings: %w", err)
+		return st.s.Clone(), errors.New("invalid settings: a value has the wrong type")
 	}
 	if err := next.Normalize(); err != nil {
 		return st.s.Clone(), err

@@ -2,7 +2,9 @@ package miner
 
 import (
 	"net/url"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +128,56 @@ func TestWantedTreeFallbackOrder(t *testing.T) {
 	m.policy.priorityOnly = true
 	if tree := m.wantedTreeLocked(); len(tree) != 1 {
 		t.Fatalf("priority-only queue has %d games, want 1", len(tree))
+	}
+}
+
+func TestEndingSoonestReordersListedGames(t *testing.T) {
+	s := config.Defaults()
+	s.GamesToWatch = []string{"Later", "Sooner", "Tie"}
+	m := testMiner(s)
+	base := time.Now()
+	for name, hours := range map[string]time.Duration{"Later": 72, "Sooner": 5, "Tie": 72} {
+		c := testCampaign(m, name, dropSpec{id: name, name: name, minutes: 30})
+		c.EndsAt = base.Add(hours * time.Hour)
+		c.Drops[0].EndsAt = c.EndsAt
+	}
+	names := func() []string {
+		var out []string
+		for _, g := range m.wantedTreeLocked() {
+			out = append(out, g.GameName)
+		}
+		return out
+	}
+	if got, want := names(), []string{"Later", "Sooner", "Tie"}; !slices.Equal(got, want) {
+		t.Fatalf("list order: got %v, want %v", got, want)
+	}
+	m.policy.endingSoonest = true
+	if got, want := names(), []string{"Sooner", "Later", "Tie"}; !slices.Equal(got, want) {
+		t.Fatalf("ending soonest: got %v, want %v", got, want)
+	}
+}
+
+func TestStartedCampaignAlerts(t *testing.T) {
+	s := config.Defaults()
+	s.GamesToWatch = []string{"Listed"}
+	m := testMiner(s)
+	m.seen = &seenCampaigns{path: filepath.Join(t.TempDir(), "seen.json"), ids: map[string]time.Time{}}
+	testCampaign(m, "Listed", dropSpec{id: "a", name: "A", minutes: 30})
+
+	// The first run only records campaigns that are already running.
+	if alerts, snap := m.collectStartedLocked(); len(alerts) != 0 || snap == nil {
+		t.Fatalf("seeding run: %d alerts, snapshot %v", len(alerts), snap)
+	}
+
+	listed := testCampaign(m, "Listed", dropSpec{id: "b", name: "B", minutes: 30})
+	listed.ID = "c-new"
+	testCampaign(m, "Unlisted", dropSpec{id: "c", name: "C", minutes: 30})
+	alerts, _ := m.collectStartedLocked()
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Title, "Listed campaign") {
+		t.Fatalf("want one alert for the listed game, got %+v", alerts)
+	}
+	if again, _ := m.collectStartedLocked(); len(again) != 0 {
+		t.Fatal("a campaign must only be announced once")
 	}
 }
 

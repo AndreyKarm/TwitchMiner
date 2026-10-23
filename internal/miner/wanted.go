@@ -44,6 +44,16 @@ func (m *Miner) wantedDropsLocked(c *Campaign, now time.Time) []WantedDrop {
 	return out
 }
 
+func soonestEnd(g WantedGame) time.Time {
+	var best time.Time
+	for _, c := range g.Campaigns {
+		if best.IsZero() || c.ends.Before(best) {
+			best = c.ends
+		}
+	}
+	return best
+}
+
 func newWantedCampaign(c *Campaign, drops []WantedDrop) WantedCampaign {
 	return WantedCampaign{ID: c.ID, Name: c.Name, URL: c.URL(), Drops: drops, ends: c.EndsAt}
 }
@@ -79,6 +89,10 @@ func (m *Miner) wantedTreeLocked() []WantedGame {
 		}
 		queued[game.ID] = true
 		out = append(out, WantedGame{GameID: game.ID, GameName: game.Name, GameIcon: game.BoxArtURL, Campaigns: campaigns, game: game})
+	}
+	if m.policy.endingSoonest {
+		// Mine whatever runs out first; list order breaks ties.
+		slices.SortStableFunc(out, func(a, b WantedGame) int { return soonestEnd(a).Compare(soonestEnd(b)) })
 	}
 
 	if m.policy.priorityOnly {

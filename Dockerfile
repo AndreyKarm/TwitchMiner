@@ -1,10 +1,13 @@
-FROM golang:1.25-alpine AS build
+# The build stage runs on the build machine's own architecture and
+# cross-compiles, so multi-arch images don't need to emulate the Go build.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath \
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
 	-ldflags "-s -w -X github.com/AndreyKarm/TwitchMiner/internal/config.Version=${VERSION}" \
 	-o /twitchminer ./cmd/twitchminer
 # The runtime image has no shell, so prepare the data folder here.

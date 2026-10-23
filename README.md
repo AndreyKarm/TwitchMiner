@@ -9,20 +9,29 @@ It's a single Go binary with a built-in web dashboard. It's a Go rewrite of
 [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner), which is
 based on [DevilXD/TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner).
 
-## Run it
+## Download
+
+Each [release](../../releases) has builds for Windows, Linux and macOS, plus a
+`SHA256SUMS` file. On Windows, unzip it and run `twitchminer.exe`. It runs in the
+system tray, with no console window, and opens the dashboard in your browser. The
+tray menu has **Open dashboard**, **Pause mining** and **Quit**. Clicking the icon
+also opens the dashboard. The log goes to `data/twitchminer.log`.
+
+## Run from source
 
 ```bash
 go run ./cmd/twitchminer
 ```
 
-The dashboard opens at <http://127.0.0.1:8080>. Settings and your login are saved in
-`./data`.
+The dashboard opens at <http://127.0.0.1:8080>. Settings, your login and the log are
+saved in `./data`.
 
 | Flag | Environment variable | Default | Meaning |
 | --- | --- | --- | --- |
 | `-addr` | `TWITCHMINER_ADDR` | `127.0.0.1:8080` | Dashboard address. Use `0.0.0.0:8080` to reach it from other devices. |
-| `-data` | `TWITCHMINER_DATA` | `data` | Folder for `settings.json` and `auth.json` |
+| `-data` | `TWITCHMINER_DATA` | `data` | Folder for settings, login and the log |
 | `-open` | `TWITCHMINER_NO_BROWSER` (set to disable) | on | Open the dashboard in your browser on start |
+| `-tray` | `TWITCHMINER_NO_TRAY` (set to disable) | on (Windows) | Show the tray icon |
 | `-v` | | off | Debug logging |
 
 To build a standalone binary:
@@ -30,6 +39,9 @@ To build a standalone binary:
 ```bash
 go build -o twitchminer.exe ./cmd/twitchminer
 ```
+
+Add `-ldflags -H=windowsgui` on Windows to hide the console window, like the release
+builds do.
 
 ## Log in
 
@@ -46,11 +58,34 @@ Twitch can be mined.
 
 - **Dashboard** shows the drop being mined, the mining queue, the console, and the
   tracked channels. Click a channel to watch it. Picking a channel of another game
-  switches to manual mode until you go back to auto.
+  switches to manual mode until you go back to auto. **Pause** stops watching until
+  you resume. Drops Twitch reports as ready are still claimed while paused.
+- **Games** is your watch list. Search to add games; it suggests the ones with
+  campaigns. Drag games to set their priority. The list also has two switches:
+  - **Mine the campaign that ends soonest first** orders your listed games by their
+    earliest-ending campaign, so time-limited rewards aren't missed. List order breaks
+    ties.
+  - **Only mine games on this list**: turn it off to mine other eligible games once
+    the listed ones run out.
 - **Inventory** lists campaigns with their drops, progress and account-link status.
-- **Settings** sets the games to watch, in priority order. Turn off **Only mine games
-  on this list** to mine other eligible games when the listed ones run out. You can
-  also choose which reward types count, ignore drops by name, and set a proxy.
+- **Settings** chooses which reward types count, ignores drops by name, sets campaign
+  alerts, and sets a proxy.
+
+### Campaign alerts
+
+TwitchMiner can send a Telegram or Discord message when a drops campaign starts for a
+game you'd mine. Set it up in **Settings → Campaign alerts**, then use **Send test**:
+
+- **Telegram:** create a bot with [@BotFather](https://t.me/BotFather) and paste its
+  token. Message the bot once, then enter your chat ID, or add the bot to a channel
+  and enter `@channelname`.
+- **Discord:** create a webhook in Server Settings → Integrations → Webhooks and paste
+  its URL.
+
+The token and webhook URL stay on the server; the dashboard only shows whether each is
+set. On the first run, campaigns that are already running are recorded without
+alerting, so you only hear about new ones. Alerts only cover campaigns Twitch shows
+this login (see [Log in](#log-in)).
 
 ## Docker
 
@@ -94,11 +129,30 @@ The code is laid out as follows:
 - `internal/web` has the dashboard server, which pushes live state over
   Server-Sent Events, and the plain HTML, CSS and JavaScript frontend in `static/`.
 
+- `internal/notify` sends Telegram and Discord alerts.
+
 The frontend uses no framework or build step. `static/app.css` is the shared base
 style, and `static/dashboard.css` builds on its color tokens.
+
+### Releases
+
+Push a version tag to publish a release:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The [release workflow](.github/workflows/release.yml) then:
+
+1. Runs the tests on Linux and Windows.
+2. Builds Windows, Linux and macOS binaries for amd64 and arm64 and attaches them to
+   a GitHub release with checksums.
+3. Pushes a multi-arch Docker image to `ghcr.io/<owner>/<repo>`, tagged with the
+   version and `latest`.
 
 ## Not ported yet
 
 These Python features aren't in the Go version yet: claimed-drop history and CSV
-export, Telegram and Discord notifications, mining hours, a dashboard password,
-channel ban detection, diagnostics dumps, and translations.
+export, claim notifications, mining hours, a dashboard password, channel ban
+detection, diagnostics dumps, and translations.

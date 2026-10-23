@@ -36,6 +36,7 @@
 	<main class="shell">
 		<div class="statusbar">
 			<span class="status" id="status">Starting...</span>
+			<button class="btn-ghost small-btn" id="pause" type="button" hidden>Pause</button>
 			<span class="pill pill-manual" id="manual" hidden>
 				<span id="manual-text"></span>
 				<button class="link-button" id="manual-exit" type="button">Back to auto</button>
@@ -97,9 +98,17 @@
 						<h2>Watch list</h2>
 						<span class="muted small" id="watch-count"></span>
 					</div>
-					<p class="hint">Mined from top to bottom. Drag a game to change its priority.</p>
+					<p class="hint" id="watch-hint">Mined from top to bottom. Drag a game to change its priority.</p>
 					<ol class="game-list" id="games" aria-describedby="drag-help"></ol>
 					<p class="sr-only" id="drag-help">Focus a drag handle and press the up or down arrow key to move the game.</p>
+					<label class="toggle">
+						<input type="checkbox" id="ending-soonest">
+						<span class="toggle-track"></span>
+						<span class="toggle-label">
+							Mine the campaign that ends soonest first
+							<small>Listed games are mined in order of their earliest-ending campaign, so time-limited rewards come first. List order breaks ties.</small>
+						</span>
+					</label>
 					<label class="toggle">
 						<input type="checkbox" id="priority-only">
 						<span class="toggle-track"></span>
@@ -163,6 +172,41 @@
 					<p class="hint">One word or phrase per line. Drops whose names contain any of them, and drops that depend on them, are skipped.</p>
 					<textarea id="blacklist" rows="5" spellcheck="false" placeholder="e.g. Skin"></textarea>
 					<div class="row-end"><button type="button" id="blacklist-save">Save</button></div>
+				</article>
+
+				<article class="panel">
+					<h2>Campaign alerts</h2>
+					<p class="hint">Get a message when a drops campaign starts for a game you'd mine. Only campaigns Twitch shows this login are covered.</p>
+
+					<h3 class="subhead">Telegram <span class="tag" id="telegram-state"></span></h3>
+					<p class="hint">Create a bot with @BotFather and copy its token. Then send the bot a message and use your chat ID, or add it to a channel and use @channelname.</p>
+					<div class="field-grid">
+						<label class="field">
+							<span>Bot token</span>
+							<input type="password" id="telegram-token" autocomplete="off" spellcheck="false">
+						</label>
+						<label class="field">
+							<span>Chat ID</span>
+							<input type="text" id="telegram-chat" autocomplete="off" spellcheck="false" placeholder="123456789 or @channel">
+						</label>
+					</div>
+					<div class="button-row alert-actions">
+						<button type="button" id="telegram-save">Save</button>
+						<button type="button" class="btn-ghost" id="telegram-test">Send test</button>
+						<button type="button" class="btn-ghost" id="telegram-clear">Remove</button>
+					</div>
+
+					<h3 class="subhead">Discord <span class="tag" id="discord-state"></span></h3>
+					<p class="hint">In your server: Server Settings → Integrations → Webhooks → New Webhook, then copy its URL.</p>
+					<label class="field">
+						<span>Webhook URL</span>
+						<input type="password" id="discord-webhook" autocomplete="off" spellcheck="false">
+					</label>
+					<div class="button-row alert-actions">
+						<button type="button" id="discord-save">Save</button>
+						<button type="button" class="btn-ghost" id="discord-test">Send test</button>
+						<button type="button" class="btn-ghost" id="discord-clear">Remove</button>
+					</div>
 				</article>
 
 				<article class="panel">

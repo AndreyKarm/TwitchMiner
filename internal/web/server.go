@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"io"
@@ -37,8 +38,10 @@ func NewServer(hub *Hub, m *miner.Miner, settings *config.Store) *Server {
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	s.mux.HandleFunc("GET /api/events", s.events)
 	s.mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, s.settings.Get())
+		writeJSON(w, http.StatusOK, s.settings.Get().Public())
 	})
+	s.mux.HandleFunc("POST /api/pause", s.guard(s.setPaused))
+	s.mux.HandleFunc("POST /api/alerts/test", s.guard(s.testAlert))
 	s.mux.HandleFunc("POST /api/settings", s.guard(s.patchSettings))
 	s.mux.HandleFunc("POST /api/channels/select", s.guard(s.selectChannel))
 	s.mux.HandleFunc("POST /api/manual/exit", s.guard(func(w http.ResponseWriter, r *http.Request) {
@@ -89,11 +92,40 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	next, err := s.settings.Patch(body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "settings": next})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "settings": next.Public()})
 		return
 	}
 	s.miner.SettingsChanged(next)
-	writeJSON(w, http.StatusOK, next)
+	writeJSON(w, http.StatusOK, next.Public())
+}
+
+func (s *Server) setPaused(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paused bool `json:"paused"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "paused must be true or false"})
+		return
+	}
+	s.miner.SetPaused(req.Paused)
+	writeJSON(w, http.StatusOK, map[string]bool{"paused": req.Paused})
+}
+
+func (s *Server) testAlert(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.miner.TestAlert(ctx, req.Target); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) selectChannel(w http.ResponseWriter, r *http.Request) {

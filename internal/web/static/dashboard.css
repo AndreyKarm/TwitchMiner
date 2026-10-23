@@ -490,6 +490,34 @@ input[type='checkbox'] {
 	color: var(--muted);
 }
 
+.statusbar #pause {
+	padding: 0.3rem 0.8rem;
+	font-size: 0.78rem;
+	border-radius: 999px;
+}
+
+.statusbar #pause.btn-paused {
+	background: var(--primary);
+	border-color: var(--primary);
+	color: var(--text);
+}
+
+.statusbar #pause.btn-paused:hover {
+	background: var(--accent);
+}
+
+.subhead {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.92rem;
+	margin: 1.25rem 0 0.4rem;
+}
+
+.alert-actions {
+	margin: 0.9rem 0 0;
+}
+
 .pill {
 	display: inline-flex;
 	align-items: center;

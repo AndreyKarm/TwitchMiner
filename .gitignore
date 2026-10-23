@@ -2,7 +2,7 @@
 /data/
 /.devdata/
 
-# Build output
+# Build output (dist/ is also what the release workflow assembles)
 /twitchminer
 /twitchminer.exe
 /dist/

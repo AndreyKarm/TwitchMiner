@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,14 +28,18 @@ import (
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "twitchminer:", err)
+		slog.Error("fatal", "err", err)
+		// The Windows tray build has no console, so say it in a dialog too.
+		showFatal("TwitchMiner couldn't start:\n\n" + err.Error())
 		os.Exit(1)
 	}
 }
 
 func run() error {
 	addr := flag.String("addr", envOr("TWITCHMINER_ADDR", "127.0.0.1:8080"), "dashboard listen address")
-	dataDir := flag.String("data", envOr("TWITCHMINER_DATA", "data"), "directory for settings and login")
+	dataDir := flag.String("data", envOr("TWITCHMINER_DATA", "data"), "directory for settings, login and the log file")
 	open := flag.Bool("open", os.Getenv("TWITCHMINER_NO_BROWSER") == "", "open the dashboard in a browser on start")
+	tray := flag.Bool("tray", trayAvailable && os.Getenv("TWITCHMINER_NO_TRAY") == "", "show a system tray icon (Windows only)")
 	verbose := flag.Bool("v", false, "verbose logging")
 	version := flag.Bool("version", false, "print the version and exit")
 	healthcheck := flag.Bool("healthcheck", false, "check that a running dashboard on -addr responds, then exit")
@@ -47,15 +52,19 @@ func run() error {
 	if *healthcheck {
 		return checkHealth(*addr)
 	}
+	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
+		return err
+	}
 	level := slog.LevelInfo
 	if *verbose {
 		level = slog.LevelDebug
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-
-	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
-		return err
+	logFile := openLogFile(filepath.Join(*dataDir, "twitchminer.log"))
+	if logFile != nil {
+		defer logFile.Close()
 	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(teeWriter{os.Stderr, logFile}, &slog.HandlerOptions{Level: level})))
+
 	settings, err := config.LoadStore(filepath.Join(*dataDir, "settings.json"))
 	if err != nil {
 		return err
@@ -64,7 +73,7 @@ func run() error {
 
 	hub := web.NewHub()
 	hub.Publish("version", config.Version)
-	hub.Publish("settings", s)
+	hub.Publish("settings", s.Public())
 	hub.Publish("status", "Starting...")
 
 	client := config.SmartTV()
@@ -73,7 +82,7 @@ func run() error {
 		return err
 	}
 	auth := twitch.NewAuth(filepath.Join(*dataDir, "auth.json"), httpClient, client)
-	m := miner.New(settings, httpClient, auth, hub)
+	m := miner.New(settings, httpClient, auth, hub, *dataDir)
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -93,7 +102,16 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	m.Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		m.Run(ctx)
+		close(done)
+	}()
+	if *tray {
+		// Blocks until Quit is chosen or the miner stops.
+		runTray(url, m, stop, done)
+	}
+	<-done
 
 	slog.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -122,6 +140,35 @@ func checkHealth(addr string) error {
 		return fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// openLogFile opens the log for appending, starting fresh once it passes
+// 5 MB. It returns nil if the file can't be opened.
+func openLogFile(path string) *os.File {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if info, err := os.Stat(path); err == nil && info.Size() > 5<<20 {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
+// teeWriter writes to the console and the log file. Write errors are
+// ignored, because a GUI build on Windows has no valid stderr.
+type teeWriter struct {
+	console io.Writer
+	file    *os.File
+}
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	t.console.Write(p)
+	if t.file != nil {
+		t.file.Write(p)
+	}
+	return len(p), nil
 }
 
 func envOr(key, fallback string) string {

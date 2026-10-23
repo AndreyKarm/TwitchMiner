@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -44,6 +45,7 @@ const (
 type policy struct {
 	games          []string
 	priorityOnly   bool
+	endingSoonest  bool
 	benefits       map[string]bool
 	keywords       []string
 	keywordKey     string
@@ -55,6 +57,7 @@ func newPolicy(s config.Settings) policy {
 	return policy{
 		games:          s.GamesToWatch,
 		priorityOnly:   s.PriorityListOnly,
+		endingSoonest:  s.PriorityEndingSoonest,
 		benefits:       s.MiningBenefits,
 		keywords:       s.DropNameBlacklist,
 		keywordKey:     strings.ToLower(strings.Join(s.DropNameBlacklist, "\x00")) + "\x01",
@@ -96,9 +99,12 @@ type Miner struct {
 	printMu     sync.Mutex
 	lastPrinted string
 
+	seen *seenCampaigns
+
 	mu                 sync.Mutex
 	policy             policy
 	state              State
+	paused             bool
 	inventoryPending   bool
 	gamesUpdatePending bool
 	inventoryLoaded    bool
@@ -122,14 +128,16 @@ type Miner struct {
 	mntCancel          context.CancelFunc
 }
 
-// New wires a miner. Call Run to start it.
-func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI) *Miner {
+// New wires a miner that keeps its own state files in dataDir. Call Run to
+// start it.
+func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI, dataDir string) *Miner {
 	m := &Miner{
 		settings:     settings,
 		http:         h,
 		auth:         auth,
 		gql:          twitch.NewGQL(h, auth),
 		ui:           ui,
+		seen:         loadSeenCampaigns(filepath.Join(dataDir, "seen-campaigns.json")),
 		stateCh:      make(chan struct{}, 1),
 		watchCh:      make(chan struct{}, 1),
 		watchRestart: make(chan struct{}, 1),
@@ -152,6 +160,7 @@ func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI) *Mine
 
 // Run mines until ctx ends, logging in again whenever the token is lost.
 func (m *Miner) Run(ctx context.Context) {
+	m.ui.Publish("paused", m.Paused())
 	go m.uiLoop(ctx)
 	for ctx.Err() == nil {
 		err := m.auth.EnsureLogin(ctx, m.showLogin)
@@ -275,7 +284,7 @@ func (m *Miner) SettingsChanged(s config.Settings) {
 	m.dirty |= dirtyInventory | dirtyWanted
 	m.requestGamesUpdateLocked()
 	m.mu.Unlock()
-	m.ui.Publish("settings", s)
+	m.ui.Publish("settings", s.Public())
 }
 
 // SelectChannel switches to the channel the user clicked, if it's watchable.
@@ -299,6 +308,40 @@ func (m *Miner) ExitManualMode() {
 	}
 }
 
+// SetPaused stops or resumes mining. While paused nothing is watched and
+// queued reloads wait, but drops Twitch reports as ready are still claimed.
+func (m *Miner) SetPaused(paused bool) {
+	m.mu.Lock()
+	if m.paused == paused {
+		m.mu.Unlock()
+		return
+	}
+	m.paused = paused
+	if paused {
+		m.stopWatchingLocked()
+		m.changeStateLocked(StateIdle)
+	} else if m.inventoryLoaded {
+		m.requestGamesUpdateLocked()
+	} else {
+		m.inventoryPending = true
+		signal(m.stateCh)
+	}
+	m.mu.Unlock()
+	m.ui.Publish("paused", paused)
+	if paused {
+		m.print("Mining paused")
+	} else {
+		m.print("Mining resumed")
+	}
+}
+
+// Paused reports whether mining is paused.
+func (m *Miner) Paused() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.paused
+}
+
 // Logout forgets the token; the miner falls back to the login screen.
 func (m *Miner) Logout() {
 	m.print("Logging out")
@@ -320,6 +363,9 @@ func (m *Miner) changeState(s State) {
 
 // activatePendingLocked lets queued refreshes take over before the next wait.
 func (m *Miner) activatePendingLocked() {
+	if m.paused {
+		return // keep requests queued until mining resumes
+	}
 	if m.inventoryPending {
 		m.state = StateInventoryFetch
 		signal(m.stateCh)
@@ -340,8 +386,12 @@ func (m *Miner) stateLoop(ctx context.Context) {
 
 		switch state {
 		case StateIdle:
-			m.setStatus("Idle")
 			m.mu.Lock()
+			if m.paused {
+				m.setStatus("Paused")
+			} else {
+				m.setStatus("Idle")
+			}
 			m.stopWatchingLocked()
 			drain(m.stateCh)
 			m.mu.Unlock()
@@ -373,10 +423,12 @@ func (m *Miner) stateLoop(ctx context.Context) {
 			m.mu.Lock()
 			m.gamesUpdatePending = false
 			m.updateWantedLocked()
+			alerts, seen := m.collectStartedLocked()
 			fullCleanup = true
 			m.restartWatchingLocked()
 			m.changeStateLocked(StateChannelsCleanup)
 			m.mu.Unlock()
+			go m.deliverAlerts(ctx, alerts, seen)
 
 		case StateChannelsCleanup:
 			m.setStatus("Cleaning up channels...")
@@ -721,7 +773,7 @@ func (m *Miner) wantedIndexLocked(g *Game) int {
 // canWatchLocked reports whether ch is online and progresses a campaign of
 // a wanted game.
 func (m *Miner) canWatchLocked(ch *Channel) bool {
-	if len(m.wanted) == 0 || !ch.Online() {
+	if m.paused || len(m.wanted) == 0 || !ch.Online() {
 		return false
 	}
 	for _, c := range m.inventory {
