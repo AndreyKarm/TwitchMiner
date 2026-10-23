@@ -14,8 +14,16 @@ based on [DevilXD/TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)
 Each [release](../../releases) has builds for Windows, Linux and macOS, plus a
 `SHA256SUMS` file. On Windows, unzip it and run `twitchminer.exe`. It runs in the
 system tray, with no console window, and opens the dashboard in your browser. The
-tray menu has **Open dashboard**, **Pause mining** and **Quit**. Clicking the icon
-also opens the dashboard. The log goes to `data/twitchminer.log`.
+tray menu has **Open dashboard**, **Pause mining**, **Start with Windows** and
+**Quit**. Clicking the icon also opens the dashboard. The log goes to
+`data/twitchminer.log`.
+
+**Start with Windows** adds TwitchMiner to your sign-in programs (the per-user `Run`
+registry key, so no admin rights are needed). At sign-in it starts in the tray with
+the same data folder, without opening the browser. Untick it to remove the entry. If
+you move `twitchminer.exe`, the entry is updated the next time you start it from the
+new place. The option is greyed out when running with `go run`, because that
+executable is temporary.
 
 ## Run from source
 

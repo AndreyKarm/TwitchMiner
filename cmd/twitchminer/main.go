@@ -35,8 +35,18 @@ func main() {
 	}
 }
 
+const defaultAddr = "127.0.0.1:8080"
+
+// trayOptions is what the tray needs to open the dashboard and register
+// autostart with the same settings.
+type trayOptions struct {
+	url     string
+	dataDir string
+	addr    string
+}
+
 func run() error {
-	addr := flag.String("addr", envOr("TWITCHMINER_ADDR", "127.0.0.1:8080"), "dashboard listen address")
+	addr := flag.String("addr", envOr("TWITCHMINER_ADDR", defaultAddr), "dashboard listen address")
 	dataDir := flag.String("data", envOr("TWITCHMINER_DATA", "data"), "directory for settings, login and the log file")
 	open := flag.Bool("open", os.Getenv("TWITCHMINER_NO_BROWSER") == "", "open the dashboard in a browser on start")
 	tray := flag.Bool("tray", trayAvailable && os.Getenv("TWITCHMINER_NO_TRAY") == "", "show a system tray icon (Windows only)")
@@ -109,7 +119,7 @@ func run() error {
 	}()
 	if *tray {
 		// Blocks until Quit is chosen or the miner stops.
-		runTray(url, m, stop, done)
+		runTray(trayOptions{url: url, dataDir: *dataDir, addr: *addr}, m, stop, done)
 	}
 	<-done
 

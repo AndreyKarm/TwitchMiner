@@ -12,6 +12,6 @@ import (
 // terminal or as a service.
 const trayAvailable = false
 
-func runTray(string, *miner.Miner, context.CancelFunc, <-chan struct{}) {}
+func runTray(trayOptions, *miner.Miner, context.CancelFunc, <-chan struct{}) {}
 
 func showFatal(string) {}
