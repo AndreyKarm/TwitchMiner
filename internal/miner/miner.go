@@ -79,6 +79,13 @@ func (p policy) sameMining(o policy) bool {
 		p.allowUnlinked == o.allowUnlinked
 }
 
+// gamesAdded reports whether next lists a game that prev doesn't.
+func gamesAdded(prev, next []string) bool {
+	return slices.ContainsFunc(next, func(name string) bool {
+		return !slices.ContainsFunc(prev, func(p string) bool { return strings.EqualFold(p, name) })
+	})
+}
+
 type dirtyFlags uint8
 
 const (
@@ -324,13 +331,20 @@ func (m *Miner) SettingsChanged(s config.Settings) {
 	m.mu.Lock()
 	netChanged := s.ConnectionQuality != m.netQuality || s.Proxy != m.netProxy
 	m.netQuality, m.netProxy = s.ConnectionQuality, s.Proxy
-	next := newPolicy(s)
-	miningChanged := !m.policy.sameMining(next)
-	refreshChanged := next.refreshMinutes != m.policy.refreshMinutes
+	old, next := m.policy, newPolicy(s)
+	miningChanged := !old.sameMining(next)
+	refreshChanged := next.refreshMinutes != old.refreshMinutes
 	m.policy = next
 	if miningChanged {
 		m.dirty |= dirtyInventory | dirtyWanted
 		m.requestGamesUpdateLocked()
+	}
+	// Without Twitch's campaign list, a newly listed game's campaigns are
+	// only found by searching its channels, so search now rather than at the
+	// next periodic reload.
+	if m.catalogHidden && gamesAdded(old.games, next.games) {
+		m.inventoryPending = true
+		signal(m.stateCh)
 	}
 	sctx, loaded := m.sctx, m.inventoryLoaded
 	m.mu.Unlock()

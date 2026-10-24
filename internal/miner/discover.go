@@ -36,7 +36,7 @@ func (m *Miner) discoverCampaigns(ctx context.Context, skip map[string]any) (map
 		for batch := range slices.Chunk(chs, 20) {
 			ops := make([]any, len(batch))
 			for i, ch := range batch {
-				ops[i] = config.OpAvailableDrops.With(map[string]any{"channelID": ch.ID})
+				ops[i] = config.ChannelCampaigns(ch.ID)
 			}
 			resps, err := m.gql.Do(ctx, ops...)
 			if err != nil {
@@ -77,20 +77,33 @@ func addDiscovered(found map[string]map[string]any, c map[string]any, ch *Channe
 	entry := found[id]
 	if entry == nil {
 		drops := asList(c["timeBasedDrops"])
+		status, _ := c["status"].(string)
+		if status == "" {
+			status = "ACTIVE"
+		}
+		startAt, _ := c["startAt"].(string)
+		if startAt == "" {
+			// Without a campaign start, its earliest drop starts it.
+			startAt = earliestStart(drops)
+		}
+		self, _ := c["self"].(map[string]any)
+		if self == nil {
+			// Twitch offers it to this viewer but didn't say whether the
+			// game account is linked; assume it is rather than skip it.
+			self = map[string]any{"isAccountConnected": true}
+		}
 		entry = map[string]any{
-			"id":     id,
-			"name":   c["name"],
-			"status": "ACTIVE",
-			// The campaign itself carries no start; its earliest drop starts it.
-			"startAt":        earliestStart(drops),
+			"id":             id,
+			"name":           c["name"],
+			"status":         status,
+			"startAt":        startAt,
 			"endAt":          c["endAt"],
-			"accountLinkURL": "",
+			"accountLinkURL": c["accountLinkURL"],
 			"game": map[string]any{
 				"id": game.ID, "name": game.Name, "displayName": game.Name,
 				"slug": game.Slug, "boxArtURL": game.BoxArtURL,
 			},
-			// Twitch offers it to this viewer; link status isn't reported.
-			"self":           map[string]any{"isAccountConnected": true},
+			"self":           self,
 			"allow":          map[string]any{"isEnabled": true, "channels": []any{}},
 			"timeBasedDrops": drops,
 			"discovered":     true,
@@ -105,6 +118,32 @@ func addDiscovered(found map[string]map[string]any, c map[string]any, ch *Channe
 		}
 	}
 	allow["channels"] = append(channels, map[string]any{"id": ch.ID, "name": ch.Login, "displayName": ch.DisplayName})
+}
+
+// GameResult is a Twitch category matching a search.
+type GameResult struct {
+	Name string `json:"name"`
+	Icon string `json:"icon"`
+}
+
+// SearchGames looks up Twitch categories by name, so games without a known
+// campaign can be added under the exact name their directory uses.
+func (m *Miner) SearchGames(ctx context.Context, query string) ([]GameResult, error) {
+	resp, err := m.gql.Do1(ctx, config.SearchGames(query, 8))
+	if err != nil {
+		return nil, err
+	}
+	out := []GameResult{}
+	for _, raw := range asList(twitch.Dig(resp, "data", "searchCategories", "edges")) {
+		var node rawGame
+		if twitch.Decode(twitch.Dig(raw, "node"), &node) != nil {
+			continue
+		}
+		if g := newGame(&node); g != nil {
+			out = append(out, GameResult{Name: g.Name, Icon: g.BoxArtURL})
+		}
+	}
+	return out, nil
 }
 
 func earliestStart(drops []any) string {

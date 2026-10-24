@@ -116,10 +116,51 @@ func TestIdleDiscoveryChecksMoreOften(t *testing.T) {
 	if got := m.reloadIntervalLocked(); got != full {
 		t.Fatalf("with something to mine: reload every %v, want %v", got, full)
 	}
+	m.policy.games = []string{"Rust", "Rocket League"}
+	if got := m.reloadIntervalLocked(); got != idleDiscoveryInterval {
+		t.Fatalf("with a listed game waiting for a campaign: reload every %v, want %v", got, idleDiscoveryInterval)
+	}
 	m.inventory = nil
 	m.catalogHidden = false
 	if got := m.reloadIntervalLocked(); got != full {
 		t.Fatalf("with a visible catalog: reload every %v, want %v", got, full)
+	}
+}
+
+type nopUI struct{}
+
+func (nopUI) Publish(string, any) {}
+func (nopUI) Print(string)        {}
+
+func TestAddingGameSearchesHiddenCatalogNow(t *testing.T) {
+	s := config.Defaults()
+	s.GamesToWatch = []string{"Rust"}
+	m := testMiner(s)
+	m.ui = nopUI{}
+	m.stateCh = make(chan struct{}, 1)
+	m.netQuality, m.netProxy = s.ConnectionQuality, s.Proxy
+	m.catalogHidden = true
+
+	reordered := s.Clone()
+	reordered.GamesToWatch = []string{"rust"}
+	m.SettingsChanged(reordered)
+	if m.inventoryPending {
+		t.Fatal("renaming or reordering listed games must not reload the inventory")
+	}
+
+	added := s.Clone()
+	added.GamesToWatch = []string{"Rust", "Rocket League"}
+	m.SettingsChanged(added)
+	if !m.inventoryPending {
+		t.Fatal("adding a game with a hidden catalog must search its channels right away")
+	}
+
+	m.inventoryPending, m.catalogHidden = false, false
+	more := added.Clone()
+	more.GamesToWatch = []string{"Rust", "Rocket League", "Apex"}
+	m.SettingsChanged(more)
+	if m.inventoryPending {
+		t.Fatal("with a visible catalog the new game's campaigns are already loaded")
 	}
 }
 

@@ -260,6 +260,25 @@ func TestDiscoveredCampaignsBecomeACLCampaigns(t *testing.T) {
 	if !c.allowsChannel(live("1", "pl", wt)) || c.allowsChannel(live("3", "fr", wt)) {
 		t.Fatal("only channels found carrying the campaign should progress it")
 	}
+
+	// When the channel reports the campaign's own start and link status,
+	// those win over the guesses.
+	unlinked := campaign("crl", "66366")
+	unlinked["startAt"] = start.Add(-time.Hour).Format(time.RFC3339)
+	unlinked["accountLinkURL"] = "https://example.com/link"
+	unlinked["self"] = map[string]any{"isAccountConnected": false}
+	addDiscovered(found, unlinked, live("1", "pl", wt))
+	rc = rawCampaign{}
+	if err := twitchDecode(found["crl"], &rc); err != nil {
+		t.Fatal(err)
+	}
+	c = newCampaign(m, rc, nil)
+	if c.Linked || c.Eligible() || c.LinkURL != "https://example.com/link" {
+		t.Fatalf("an unlinked campaign must not be mined: %+v", c)
+	}
+	if !c.StartsAt.Equal(start.Add(-time.Hour).Truncate(time.Second)) {
+		t.Fatalf("campaign should keep its own start: got %v", c.StartsAt)
+	}
 }
 
 func TestCanWatchNeedsWantedGameAndACL(t *testing.T) {

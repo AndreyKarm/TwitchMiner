@@ -124,13 +124,38 @@ var (
 			"sortTypeIsRecency": false,
 		})
 
-	// OpAvailableDrops lists the drop campaigns a channel takes part in. It
-	// works for logins whose campaign dashboard Twitch hides.
-	OpAvailableDrops = newOp("DropsHighlightService_AvailableDrops",
-		"9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
-		map[string]any{"channelID": ""})
-
 	OpNotificationsDelete = newOp("OnsiteNotifications_DeleteNotification",
 		"13d463c831f28ffe17dccf55b3148ed8b3edbbd0ebadd56352f1ff0160616816",
 		map[string]any{"input": map[string]any{"id": ""}})
 )
+
+// ChannelCampaigns lists the running drop campaigns a channel takes part in,
+// with the viewer's account-link status and drop progress. It works for
+// logins whose campaign dashboard Twitch hides. The web client's persisted
+// version of this query leaves out the link status and reward types.
+func ChannelCampaigns(channelID string) RawQuery {
+	return RawQuery{
+		Query: `query($id: ID!) { channel(id: $id) { id viewerDropCampaigns {
+			id name status startAt endAt accountLinkURL
+			self { isAccountConnected }
+			game { id name displayName slug boxArtURL }
+			timeBasedDrops {
+				id name startAt endAt requiredMinutesWatched
+				preconditionDrops { id }
+				self { currentMinutesWatched dropInstanceID isClaimed }
+				benefitEdges { benefit { id name imageAssetURL distributionType } }
+			}
+		} } }`,
+		Variables: map[string]any{"id": channelID},
+	}
+}
+
+// SearchGames finds Twitch categories by name. The web client's persisted
+// search query isn't accepted from the TV client, so it's sent as text.
+func SearchGames(query string, limit int) RawQuery {
+	return RawQuery{
+		Query: `query($query: String!, $first: Int!) { searchCategories(query: $query, first: $first) {
+			edges { node { id name displayName slug boxArtURL(width: 30, height: 40) } } } }`,
+		Variables: map[string]any{"query": query, "first": limit},
+	}
+}

@@ -317,7 +317,7 @@ type Campaign struct {
 	Drops    []*Drop
 	dropByID map[string]*Drop
 	// Discovered campaigns were found on live channels because Twitch hides
-	// the campaign list; their account-link status is unknown.
+	// the campaign list; only the channels found carrying them are known.
 	Discovered bool
 
 	evalKey string

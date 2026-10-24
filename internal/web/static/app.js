@@ -444,8 +444,9 @@ function campaignCard(c) {
 	else if (c.upcoming) tags.push(h('span', { class: 'tag' }, 'upcoming'));
 	else tags.push(h('span', { class: 'tag tag-red' }, 'expired'));
 	if (c.discovered) {
-		tags.push(h('span', { class: 'tag tag-pink', title: 'Twitch hides the campaign list from this login, so this was found on a live channel. Its account-link status is unknown, so check on Twitch that your game account is linked.' }, 'found on stream'));
-	} else if (c.linked) tags.push(h('span', { class: 'tag' }, 'linked'));
+		tags.push(h('span', { class: 'tag tag-pink', title: 'Twitch hides the campaign list from this login, so this was found on a live channel.' }, 'found on stream'));
+	}
+	if (c.linked) tags.push(h('span', { class: 'tag' }, 'linked'));
 	else if (linkURL) tags.push(h('a', { href: linkURL, target: '_blank', rel: 'noopener noreferrer', class: 'tag tag-red', title: 'Link your game account to earn these rewards' }, 'not linked ↗'));
 	else tags.push(h('span', { class: 'tag tag-red' }, 'not linked'));
 	tags.push(h('span', { class: c.finished ? 'tag tag-green' : 'tag' }, `${c.claimed_drops}/${c.total_drops} claimed`));
@@ -933,12 +934,14 @@ $('#ending-soonest').addEventListener('change', (e) => saveSettings({ priority_e
 
 // ---------- game search (combobox) ----------
 
-const combo = { open: false, items: [], active: -1 };
+// search holds Twitch's category matches for the query in `q`, so games
+// without a known campaign can be suggested too.
+const combo = { open: false, items: [], active: -1, search: { q: '', games: [] } };
 const comboInput = $('#game-input');
 const comboList = $('#game-suggestions');
 
 // suggestionItems lists unlisted games matching the query, prefix matches
-// first, plus an option to add exactly what was typed.
+// first, then Twitch categories, plus an option to add exactly what was typed.
 function suggestionItems() {
 	const typed = comboInput.value.trim();
 	const q = typed.toLowerCase();
@@ -946,8 +949,36 @@ function suggestionItems() {
 	let matches = catalog.filter((g) => !isListed(g.name) && g.name.toLowerCase().includes(q));
 	if (q) matches.sort((a, b) => b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q));
 	const items = matches.slice(0, 8).map((game) => ({ name: game.name, game }));
-	if (typed && !isListed(typed) && !catalog.some((g) => sameName(g.name, typed))) items.push({ name: typed, custom: true });
+	const found = q && combo.search.q === q ? combo.search.games : [];
+	for (const g of found) {
+		if (items.length >= 8) break;
+		if (isListed(g.name) || catalog.some((c) => sameName(c.name, g.name))) continue;
+		items.push({ name: g.name, game: { name: g.name, icon: safeURL(g.icon) } });
+	}
+	const known = catalog.some((g) => sameName(g.name, typed)) || found.some((g) => sameName(g.name, typed));
+	if (typed && !isListed(typed) && !known) items.push({ name: typed, custom: true });
 	return items;
+}
+
+let searchTimer = 0;
+
+// searchTwitch looks the query up among Twitch's categories after a short
+// pause in typing, and redraws the list if the query is still current.
+function searchTwitch() {
+	clearTimeout(searchTimer);
+	const q = comboInput.value.trim().toLowerCase();
+	if (!q || combo.search.q === q) return;
+	searchTimer = setTimeout(async () => {
+		try {
+			const res = await fetch(`/api/games/search?q=${encodeURIComponent(q)}`, { headers: { 'X-Requested-With': 'TwitchMiner' } });
+			if (!res.ok) return;
+			const games = await res.json();
+			combo.search = { q, games: Array.isArray(games) ? games : [] };
+			if (combo.open && comboInput.value.trim().toLowerCase() === q) renderSuggestions();
+		} catch {
+			/* offline; the known games still show */
+		}
+	}, 250);
 }
 
 function renderSuggestions() {
@@ -1025,6 +1056,7 @@ comboInput.addEventListener('input', () => {
 	combo.active = comboInput.value.trim() ? 0 : -1;
 	openCombo();
 	renderSuggestions();
+	searchTwitch();
 });
 comboInput.addEventListener('keydown', (e) => {
 	switch (e.key) {

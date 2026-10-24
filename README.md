@@ -82,7 +82,9 @@ their campaign on Twitch.
   switches to manual mode until you go back to auto. **Pause** stops watching until
   you resume. Drops Twitch reports as ready are still claimed while paused.
 - **Games** is your watch list. Search to add games; it suggests the ones with
-  campaigns. Drag games to set their priority. The list also has two switches:
+  campaigns first, then any matching Twitch category. When Twitch hides its campaign
+  list from your login, a newly added game's live channels are searched for campaigns
+  right away. Drag games to set their priority. The list also has two switches:
   - **Mine the campaign that ends soonest first** orders your listed games by their
     earliest-ending campaign, so time-limited rewards aren't missed. List order breaks
     ties.

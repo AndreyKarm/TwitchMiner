@@ -374,17 +374,29 @@ func (m *Miner) restartMaintenance(ctx context.Context) {
 	go m.maintenance(mctx, interval)
 }
 
-// idleDiscoveryInterval is how often to look for new campaigns while there's
-// nothing to mine and Twitch hides the campaign list, so new campaigns are
-// picked up soon after they start.
+// idleDiscoveryInterval is how often to look for new campaigns while a
+// listed game has nothing to mine and Twitch hides the campaign list. Live
+// channels only report campaigns that have started, so this is how soon a
+// new campaign is picked up.
 const idleDiscoveryInterval = 10 * time.Minute
 
 func (m *Miner) reloadIntervalLocked() time.Duration {
 	interval := time.Duration(m.policy.refreshMinutes) * time.Minute
-	if m.catalogHidden && len(m.wantedTreeLocked()) == 0 {
+	if m.catalogHidden && m.listedGameIdleLocked() {
 		interval = min(interval, idleDiscoveryInterval)
 	}
 	return interval
+}
+
+// listedGameIdleLocked reports whether a listed game has nothing to mine.
+func (m *Miner) listedGameIdleLocked() bool {
+	mining := 0
+	for _, g := range m.wantedTreeLocked() {
+		if !g.Fallback {
+			mining++
+		}
+	}
+	return mining < len(m.policy.games)
 }
 
 func (m *Miner) maintenance(ctx context.Context, interval time.Duration) {

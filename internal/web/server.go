@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/AndreyKarm/TwitchMiner/internal/config"
@@ -49,6 +50,7 @@ func NewServer(hub *Hub, m *miner.Miner, settings *config.Store) *Server {
 	s.mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.settings.Get().Public())
 	})
+	s.mux.HandleFunc("GET /api/games/search", s.guard(s.searchGames))
 	s.mux.HandleFunc("POST /api/pause", s.guard(s.setPaused))
 	s.mux.HandleFunc("POST /api/alerts/test", s.guard(s.testAlert))
 	s.mux.HandleFunc("POST /api/settings", s.guard(s.patchSettings))
@@ -74,8 +76,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// guard rejects cross-site writes. Browsers can't add the custom header to
-// a cross-origin request without a CORS preflight, which we never approve.
+// guard rejects cross-site writes, and reads that spend the Twitch login.
+// Browsers can't add the custom header to a cross-origin request without a
+// CORS preflight, which we never approve.
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Requested-With") != "TwitchMiner" {
@@ -106,6 +109,22 @@ func (s *Server) patchSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.miner.SettingsChanged(next)
 	writeJSON(w, http.StatusOK, next.Public())
+}
+
+func (s *Server) searchGames(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		writeJSON(w, http.StatusOK, []miner.GameResult{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	games, err := s.miner.SearchGames(ctx, query)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, games)
 }
 
 func (s *Server) setPaused(w http.ResponseWriter, r *http.Request) {
