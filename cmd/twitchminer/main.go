@@ -94,9 +94,9 @@ func run() error {
 	auth := twitch.NewAuth(filepath.Join(*dataDir, "auth.json"), httpClient, client)
 	m := miner.New(settings, httpClient, auth, hub, *dataDir)
 
-	listener, err := net.Listen("tcp", *addr)
+	listener, err := listenDashboard(*addr)
 	if err != nil {
-		return fmt.Errorf("dashboard can't listen on %s: %w", *addr, err)
+		return err
 	}
 	srv := &http.Server{Handler: web.NewServer(hub, m, settings), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -112,6 +112,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	rival := make(chan error, 1)
+	go watchForRival(ctx, *addr, func(err error) {
+		slog.Error("stopping", "err", err)
+		rival <- err
+		stop()
+	})
 	done := make(chan struct{})
 	go func() {
 		m.Run(ctx)
@@ -127,21 +133,26 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(shutdownCtx)
-	return settings.Save()
+	if err := settings.Save(); err != nil {
+		return err
+	}
+	select {
+	case err := <-rival:
+		return err
+	default:
+		return nil
+	}
 }
 
 // checkHealth is used by container health checks, since the runtime image
 // has no curl or shell.
 func checkHealth(addr string) error {
-	host, port, err := net.SplitHostPort(addr)
+	target, err := localTarget(addr)
 	if err != nil {
 		return err
 	}
-	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
-		host = "127.0.0.1"
-	}
 	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
+	resp, err := client.Get("http://" + target + "/healthz")
 	if err != nil {
 		return err
 	}
