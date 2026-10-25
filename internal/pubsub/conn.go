@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -14,7 +16,8 @@ import (
 	"github.com/AndreyKarm/TwitchMiner/internal/twitch"
 )
 
-const pubsubURL = "wss://pubsub-edge.twitch.tv/v1"
+// pubsubURL is Twitch's PubSub endpoint; tests point it at a local server.
+var pubsubURL = "wss://pubsub-edge.twitch.tv/v1"
 
 // conn is one PubSub websocket. Its topics map is guarded by the pool mutex.
 type conn struct {
@@ -114,7 +117,7 @@ func (c *conn) run(ctx context.Context) {
 		c.pool.report()
 		slog.Debug("pubsub connected", "ws", c.idx)
 
-		err = c.session(ctx, ws)
+		err = c.safeSession(ctx, ws)
 
 		c.connected.Store(false)
 		c.pool.report()
@@ -136,10 +139,23 @@ func (c *conn) run(ctx context.Context) {
 type inbound struct {
 	Type  string `json:"type"`
 	Error string `json:"error"`
+	Nonce string `json:"nonce"`
 	Data  struct {
 		Topic   string `json:"topic"`
 		Message string `json:"message"`
 	} `json:"data"`
+}
+
+// safeSession turns a panic in session into an error, so the connection
+// reconnects instead of taking the process down.
+func (c *conn) safeSession(ctx context.Context, ws *websocket.Conn) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("pubsub connection panicked", "ws", c.idx, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
+	return c.session(ctx, ws)
 }
 
 // session serves one live connection until it fails or must reconnect.
@@ -165,6 +181,10 @@ func (c *conn) session(ctx context.Context, ws *websocket.Conn) error {
 	}()
 
 	submitted := map[string]bool{}
+	// listens maps the nonce of each LISTEN in flight to its topics, so a
+	// rejected one can be retried.
+	listens := map[string][]string{}
+	var retryAt time.Time
 	signal(c.changed) // subscribe to everything we own on this new connection
 	nextPing := time.Now()
 	var pongDeadline time.Time
@@ -176,6 +196,7 @@ func (c *conn) session(ctx context.Context, ws *websocket.Conn) error {
 		case <-ctx.Done():
 			return nil
 		case <-c.reconnect:
+			slog.Info("pubsub reconnecting on request", "ws", c.idx)
 			return nil
 		case err := <-readErr:
 			return err
@@ -187,24 +208,39 @@ func (c *conn) session(ctx context.Context, ws *websocket.Conn) error {
 			}
 			switch m.Type {
 			case "MESSAGE":
-				if h := c.pool.handler(m.Data.Topic); h != nil {
-					go h(json.RawMessage(m.Data.Message))
-				}
+				c.pool.dispatch(m.Data.Topic, json.RawMessage(m.Data.Message))
 			case "PONG":
 				pongDeadline = time.Time{}
 			case "RECONNECT":
 				slog.Info("pubsub requested reconnect", "ws", c.idx)
 				return nil
 			case "RESPONSE":
-				if m.Error != "" {
-					slog.Warn("pubsub rejected a request", "ws", c.idx, "error", m.Error)
+				topics := listens[m.Nonce]
+				delete(listens, m.Nonce)
+				if m.Error == "" {
+					continue
+				}
+				slog.Warn("pubsub rejected a request", "ws", c.idx, "error", m.Error, "topics", len(topics))
+				if m.Error == "ERR_BADAUTH" {
+					c.pool.authFailed()
+				}
+				// Forget the rejected topics so the next sync sends them again.
+				for _, id := range topics {
+					delete(submitted, id)
+				}
+				if len(topics) > 0 && retryAt.IsZero() {
+					retryAt = time.Now().Add(listenRetry)
 				}
 			}
 		case <-c.changed:
-			if err := c.syncTopics(sctx, ws, submitted); err != nil {
+			if err := c.syncTopics(sctx, ws, submitted, listens); err != nil {
 				return err
 			}
 		case now := <-tick.C:
+			if !retryAt.IsZero() && now.After(retryAt) {
+				retryAt = time.Time{}
+				signal(c.changed)
+			}
 			if !pongDeadline.IsZero() && now.After(pongDeadline) {
 				slog.Info("pubsub missed a PONG", "ws", c.idx)
 				return nil
@@ -220,8 +256,12 @@ func (c *conn) session(ctx context.Context, ws *websocket.Conn) error {
 	}
 }
 
-// syncTopics sends LISTEN/UNLISTEN so the server matches c.topics.
-func (c *conn) syncTopics(ctx context.Context, ws *websocket.Conn, submitted map[string]bool) error {
+// listenRetry is how long to wait before sending rejected LISTENs again.
+var listenRetry = 30 * time.Second
+
+// syncTopics sends LISTEN/UNLISTEN so the server matches c.topics. Each
+// LISTEN's nonce is recorded in listens with the topics it covers.
+func (c *conn) syncTopics(ctx context.Context, ws *websocket.Conn, submitted map[string]bool, listens map[string][]string) error {
 	c.pool.mu.Lock()
 	var added, removed []string
 	for id := range c.topics {
@@ -238,7 +278,7 @@ func (c *conn) syncTopics(ctx context.Context, ws *websocket.Conn, submitted map
 
 	token := c.pool.token()
 	for _, batch := range chunk(removed, 10) {
-		if err := c.send(ctx, ws, listenMsg("UNLISTEN", batch, token)); err != nil {
+		if err := c.send(ctx, ws, listenMsg("UNLISTEN", nonce(30), batch, token)); err != nil {
 			return err
 		}
 		for _, id := range batch {
@@ -246,9 +286,11 @@ func (c *conn) syncTopics(ctx context.Context, ws *websocket.Conn, submitted map
 		}
 	}
 	for _, batch := range chunk(added, 10) {
-		if err := c.send(ctx, ws, listenMsg("LISTEN", batch, token)); err != nil {
+		n := nonce(30)
+		if err := c.send(ctx, ws, listenMsg("LISTEN", n, batch, token)); err != nil {
 			return err
 		}
+		listens[n] = batch
 		for _, id := range batch {
 			submitted[id] = true
 		}
@@ -256,10 +298,10 @@ func (c *conn) syncTopics(ctx context.Context, ws *websocket.Conn, submitted map
 	return nil
 }
 
-func listenMsg(kind string, topics []string, token string) map[string]any {
+func listenMsg(kind, nonce string, topics []string, token string) map[string]any {
 	return map[string]any{
 		"type":  kind,
-		"nonce": nonce(30),
+		"nonce": nonce,
 		"data":  map[string]any{"topics": topics, "auth_token": token},
 	}
 }

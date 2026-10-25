@@ -530,6 +530,7 @@ const ALERT_EVENTS = [
 	['drop_claimed', 'Drop received', 'Each reward the miner claims'],
 	['campaign_completed', 'Campaign completed', 'Every drop in a campaign is claimed'],
 	['login_required', 'Login needed', 'Twitch logged the miner out; includes the new code'],
+	['update_needed', 'Update needed', 'Twitch changed something the miner relies on'],
 ];
 
 async function saveSettings(patch, message) {
@@ -572,6 +573,7 @@ function renderSettings(force = false) {
 	};
 	setField('#blacklist', s.drop_name_blacklist.join('\n'));
 	setField('#refresh', s.minimum_refresh_interval_minutes);
+	setField('#campaign-check', s.campaign_check_minutes);
 	setField('#quality', s.connection_quality);
 	setField('#proxy', s.proxy);
 	setField('#telegram-chat', s.telegram_chat_id);
@@ -604,13 +606,14 @@ function renderSettings(force = false) {
 	// Blank fields keep the saved secret, so say so without taking much room.
 	$('#telegram-token').placeholder = s.telegram_token_set ? 'Saved (hidden)' : '123456789:ABC-DEF...';
 	$('#discord-webhook').placeholder = s.discord_configured ? 'Saved (hidden). Paste a new URL to replace it.' : 'https://discord.com/api/webhooks/...';
+	renderTelegramChats();
 	$('#telegram-test').disabled = !s.telegram_configured;
 	$('#telegram-clear').disabled = !s.telegram_token_set && !s.telegram_chat_id;
 	$('#discord-test').disabled = !s.discord_configured;
 	$('#discord-clear').disabled = !s.discord_configured;
 }
 
-for (const sel of ['#blacklist', '#refresh', '#quality', '#proxy', '#telegram-chat']) {
+for (const sel of ['#blacklist', '#refresh', '#campaign-check', '#quality', '#proxy', '#telegram-chat']) {
 	$(sel).addEventListener('input', (e) => { e.target.dataset.dirty = '1'; });
 }
 
@@ -629,6 +632,33 @@ $('#discord-save').addEventListener('click', async () => {
 });
 
 $('#telegram-clear').addEventListener('click', () => saveSettings({ clear_telegram: true }, 'Telegram alerts removed'));
+
+// renderTelegramChats helps find the chat ID: with a token saved and no
+// chat yet, the miner answers messages to the bot with their chat ID and
+// lists the chats here to pick from.
+function renderTelegramChats() {
+	const s = state.settings;
+	const el = $('#telegram-chats');
+	const waiting = !!s && s.telegram_token_set && !s.telegram_chat_id;
+	el.hidden = !waiting;
+	if (!waiting) return;
+	const chats = state.telegram_chats || [];
+	el.replaceChildren(
+		h('p', { class: 'chat-finder-hint' }, chats.length
+			? 'Pick the chat to send alerts to. The bot also replied there with its chat ID.'
+			: 'Waiting for a message: open your bot in Telegram and send it anything. It replies with your chat ID, and the chat appears here.'),
+		...chats.map((c) => h('div', { class: 'chat-row' },
+			h('div', { class: 'chat-row-body' },
+				h('span', { class: 'name' }, c.name || 'Unnamed chat'),
+				h('span', { class: 'muted small' }, `${c.type || 'chat'} · ${c.id}`)),
+			h('button', {
+				type: 'button',
+				class: 'btn-ghost small-btn',
+				'aria-label': `Use ${c.name || c.id} for alerts`,
+				onclick: () => saveSettings({ telegram_chat_id: c.id }, 'Telegram chat saved'),
+			}, 'Use'))),
+	);
+}
 $('#discord-clear').addEventListener('click', () => saveSettings({ clear_discord: true }, 'Discord alerts removed'));
 
 for (const target of ['telegram', 'discord']) {
@@ -653,10 +683,71 @@ function renderPaused() {
 	btn.hidden = !loggedIn();
 	btn.textContent = state.paused ? 'Resume mining' : 'Pause';
 	btn.classList.toggle('btn-paused', !!state.paused);
+	$('#check-now').hidden = !loggedIn();
+	renderChecks();
 }
 
 $('#pause').addEventListener('click', () =>
 	api('/api/pause', { paused: !state.paused }).catch((err) => toast(err.message, true)));
+
+// ---------- outdated Twitch requests ----------
+
+const RELEASES_URL = 'https://github.com/AndreyKarm/TwitchMiner/releases';
+
+// renderOutdated warns when Twitch stopped accepting requests the miner
+// relies on, which only an update fixes.
+function renderOutdated() {
+	const ops = state.outdated || [];
+	const el = $('#outdated');
+	el.hidden = ops.length === 0;
+	if (el.hidden) return;
+	el.replaceChildren(
+		h('strong', null, 'TwitchMiner needs an update. '),
+		`Twitch no longer accepts ${ops.length === 1 ? 'this request' : 'these requests'}: ${ops.join(', ')}. Mining may not work until you update. `,
+		h('a', { href: RELEASES_URL, target: '_blank', rel: 'noopener noreferrer' }, 'Get the latest version'),
+	);
+}
+
+// ---------- campaign checks ----------
+
+// renderChecks shows when campaigns were last loaded and when the next
+// reload is due. It runs every second so the times stay current.
+function renderChecks() {
+	const el = $('#checks');
+	const { last, next } = state.checks || {};
+	if (!loggedIn() || (!last && !next)) {
+		el.hidden = true;
+		return;
+	}
+	const parts = [];
+	if (last) {
+		const ago = Date.now() - new Date(last).getTime();
+		parts.push(ago < 60000 ? 'Checked just now' : `Checked ${fmtSpan(ago)} ago`);
+	}
+	if (next) {
+		const left = new Date(next).getTime() - Date.now();
+		parts.push(left < 60000 ? (left > 0 ? 'next in <1m' : 'next check due') : `next in ${fmtSpan(left)}`);
+	}
+	el.textContent = parts.join(' · ');
+	el.title = next ? `Next check at ${new Date(next).toLocaleTimeString()}` : '';
+	el.hidden = false;
+}
+
+async function checkNow(e) {
+	const btn = e.currentTarget;
+	btn.disabled = true;
+	try {
+		await api('/api/reload');
+		toast(state.paused ? 'Checking for campaigns after mining resumes' : 'Checking for new campaigns...');
+	} catch (err) {
+		toast(err.message, true);
+	} finally {
+		// A check takes a few seconds; don't queue a pile of them.
+		setTimeout(() => { btn.disabled = false; }, 5000);
+	}
+}
+
+$('#check-now').addEventListener('click', checkNow);
 
 $('#allow-unlinked').addEventListener('change', (e) => saveSettings({ allow_unlinked_campaigns: e.target.checked }));
 
@@ -670,15 +761,19 @@ $('#connection-save').addEventListener('click', () => {
 	if (!Number.isInteger(refresh) || refresh < 5 || refresh > 1440) {
 		return toast('The reload interval must be a whole number of minutes between 5 and 1440.', true);
 	}
+	const check = Number($('#campaign-check').value);
+	if (!Number.isInteger(check) || check < 1 || check > 1440) {
+		return toast('The campaign check interval must be a whole number of minutes between 1 and 1440.', true);
+	}
 	saveSettings({
 		minimum_refresh_interval_minutes: refresh,
+		campaign_check_minutes: check,
 		connection_quality: Number($('#quality').value),
 		proxy: $('#proxy').value.trim(),
 	}, 'Connection settings saved');
 });
 
-$('#reload').addEventListener('click', () =>
-	api('/api/reload').then(() => toast('Reloading the inventory...')).catch((err) => toast(err.message, true)));
+$('#reload').addEventListener('click', checkNow);
 
 $('#logout').addEventListener('click', () =>
 	confirmDialog('Log out of Twitch?', 'TwitchMiner forgets its saved login and shows a new activation code. Your settings are kept.', 'Log out', () =>
@@ -750,6 +845,10 @@ function gameCatalog() {
 	return [...byName.values()].sort((a, b) =>
 		(b.toMine > 0) - (a.toMine > 0) || (b.active > 0) - (a.active > 0) || a.ends - b.ends || a.name.localeCompare(b.name));
 }
+
+// savedIcon is the box art the miner looked up for a game, for games with no
+// campaign to take a picture from.
+const savedIcon = (name) => state.game_icons?.[name.toLowerCase()] || null;
 
 function gameMeta(g) {
 	if (!g || !(g.active || g.upcoming)) return 'No campaign right now';
@@ -830,7 +929,7 @@ function watchRow(name, i, total, g) {
 			onkeydown: (e) => keyMove(e, i),
 		}, h('span', { class: 'grip', 'aria-hidden': 'true' })),
 		h('span', { class: 'rank' }, i + 1),
-		thumb(g?.icon, 'thumb thumb-sm', 30, 40),
+		thumb(g?.icon || savedIcon(name), 'thumb thumb-sm', 30, 40),
 		h('div', { class: 'game-row-body' },
 			h('span', { class: 'name', title: name }, name),
 			h('span', { class: g?.toMine ? 'game-row-meta' : 'game-row-meta dim' }, gameMeta(g))),
@@ -1098,7 +1197,11 @@ const renderers = {
 	wanted: renderWanted,
 	manual: renderManual,
 	games: renderGamesTab,
+	game_icons: renderGamesTab,
 	paused: renderPaused,
+	checks: renderChecks,
+	outdated: renderOutdated,
+	telegram_chats: renderTelegramChats,
 	pubsub: renderPubsub,
 	version: () => { $('#version').textContent = `TwitchMiner ${state.version}`; },
 };
@@ -1120,6 +1223,7 @@ function connect() {
 setInterval(() => {
 	tickProgress();
 	tickLogin();
+	renderChecks();
 }, 1000);
 
 showTab(activeTab);

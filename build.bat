@@ -1,6 +1,8 @@
 @echo off
 rem Builds dist\twitchminer.exe for Windows with the app icon and version
-rem details embedded.
+rem details embedded, compresses it with UPX and packs it into
+rem dist\TwitchMiner-<version>-windows-<arch>.rar with WinRAR. Either step
+rem is skipped, with a note, when its tool isn't installed.
 rem
 rem   build.bat                 tray app for 64-bit Windows (no console window)
 rem   build.bat arm64           the same for Windows on ARM
@@ -77,8 +79,43 @@ if errorlevel 1 (
 )
 call :cleanup
 
+rem UPX shrinks the exe to about a third. Some antivirus programs distrust
+rem UPX-packed files; if one flags the exe, build without UPX installed.
+where upx >nul 2>nul
+if errorlevel 1 (
+    echo   - skipping UPX: it isn't installed or isn't on PATH ^(https://upx.github.io^)
+    goto :upx_done
+)
+echo   - compressing with UPX
+upx --best --lzma -q dist\twitchminer.exe >nul
+if errorlevel 1 echo     UPX couldn't compress this build; keeping the uncompressed exe.
+:upx_done
+
+rem WinRAR's console tool usually isn't on PATH, so look in its install
+rem folders too.
+set "RAR="
+for /f "delims=" %%R in ('where rar 2^>nul') do if not defined RAR set "RAR=%%R"
+if not defined RAR if exist "%ProgramFiles%\WinRAR\Rar.exe" set "RAR=%ProgramFiles%\WinRAR\Rar.exe"
+if not defined RAR if exist "%ProgramFiles(x86)%\WinRAR\Rar.exe" set "RAR=%ProgramFiles(x86)%\WinRAR\Rar.exe"
+set "ARCHIVE="
+if not defined RAR (
+    echo   - skipping the .rar: WinRAR isn't installed ^(https://www.win-rar.com^)
+    goto :rar_done
+)
+set "ARCHIVE=dist\TwitchMiner-%VERSION%-windows-%ARCH%.rar"
+echo   - packing %ARCHIVE%
+if exist "%ARCHIVE%" del /q "%ARCHIVE%"
+"%RAR%" a -ep1 -m5 -idq -y "%ARCHIVE%" dist\twitchminer.exe
+if errorlevel 1 (
+    echo.
+    echo Packing the .rar failed.
+    exit /b 1
+)
+:rar_done
+
 echo.
 echo Done: %CD%\dist\twitchminer.exe
+if defined ARCHIVE echo       %CD%\%ARCHIVE%
 exit /b 0
 
 :cleanup

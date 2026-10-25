@@ -37,11 +37,15 @@
 		<div class="statusbar">
 			<span class="status" id="status">Starting...</span>
 			<button class="btn-ghost small-btn" id="pause" type="button" hidden>Pause</button>
+			<button class="btn-ghost small-btn" id="check-now" type="button" hidden>Check for campaigns</button>
+			<span class="muted small" id="checks" hidden></span>
 			<span class="pill pill-manual" id="manual" hidden>
 				<span id="manual-text"></span>
 				<button class="link-button" id="manual-exit" type="button">Back to auto</button>
 			</span>
 		</div>
+
+		<div class="banner" id="outdated" role="alert" hidden></div>
 
 		<section id="login-view" class="login-view" hidden>
 			<div class="container">
@@ -178,29 +182,48 @@
 					</article>
 
 					<article class="panel">
-						<h2>Connection</h2>
-						<div class="field-grid">
-							<label class="field">
-								<span>Reload inventory every (minutes)</span>
-								<input type="number" id="refresh" min="5" max="1440" step="1">
-							</label>
-							<label class="field">
-								<span>Connection quality</span>
-								<select id="quality">
-									<option value="1">1 – fast connection</option>
-									<option value="2">2</option>
-									<option value="3">3</option>
-									<option value="4">4</option>
-									<option value="5">5</option>
-									<option value="6">6 – very slow connection</option>
-								</select>
-							</label>
+						<h2>Checks &amp; connection</h2>
+						<div class="setting-group">
+							<h3 class="subhead">Campaign checks</h3>
+							<p class="hint" id="checks-hint">Twitch hides its campaign list from this login, so new campaigns are found on live channels. While a listed game has nothing to mine, that search uses the second, shorter interval.</p>
+							<div class="field-grid">
+								<label class="field">
+									<span>Reload inventory every</span>
+									<span class="unit-input">
+										<input type="number" id="refresh" min="5" max="1440" step="1">
+										<span class="unit">min</span>
+									</span>
+								</label>
+								<label class="field">
+									<span>Look for new campaigns every</span>
+									<span class="unit-input">
+										<input type="number" id="campaign-check" min="1" max="1440" step="1" aria-describedby="checks-hint">
+										<span class="unit">min</span>
+									</span>
+								</label>
+							</div>
 						</div>
-						<div class="inline-form proxy-row">
-							<label class="field">
-								<span>Proxy (optional)</span>
-								<input type="text" id="proxy" placeholder="http://host:port or socks5://host:port" spellcheck="false">
-							</label>
+						<div class="setting-group">
+							<h3 class="subhead">Network</h3>
+							<div class="field-grid">
+								<label class="field">
+									<span>Connection quality</span>
+									<select id="quality">
+										<option value="1">1 – fast connection</option>
+										<option value="2">2</option>
+										<option value="3">3</option>
+										<option value="4">4</option>
+										<option value="5">5</option>
+										<option value="6">6 – very slow connection</option>
+									</select>
+								</label>
+								<label class="field">
+									<span>Proxy (optional)</span>
+									<input type="text" id="proxy" placeholder="http:// or socks5://host:port" spellcheck="false">
+								</label>
+							</div>
+						</div>
+						<div class="row-end">
 							<button type="button" id="connection-save">Save</button>
 						</div>
 					</article>
@@ -215,7 +238,7 @@
 
 						<div class="subcard">
 							<h3 class="subhead">Telegram <span class="tag" id="telegram-state"></span></h3>
-							<p class="hint">Create a bot with @BotFather and paste its token. Message the bot once and use your chat ID, or add it to a channel and use @channelname.</p>
+							<p class="hint">Create a bot with @BotFather, paste its token and save. Then send the bot any message: it replies with your chat ID. For a channel, add the bot and use @channelname.</p>
 							<div class="field-grid">
 								<label class="field">
 									<span>Bot token</span>
@@ -226,6 +249,7 @@
 									<input type="text" id="telegram-chat" autocomplete="off" spellcheck="false" placeholder="123456789 or @channel">
 								</label>
 							</div>
+							<div class="chat-finder" id="telegram-chats" aria-live="polite" hidden></div>
 							<div class="button-row alert-actions">
 								<button type="button" id="telegram-save">Save</button>
 								<button type="button" class="btn-ghost" id="telegram-test">Send test</button>

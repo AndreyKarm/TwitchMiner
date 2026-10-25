@@ -44,6 +44,57 @@ func TestTelegramSendsMessageAndHidesToken(t *testing.T) {
 	}
 }
 
+func TestTelegramUpdatesListChatsOnce(t *testing.T) {
+	var got map[string]any
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		data, _ := io.ReadAll(r.Body)
+		json.Unmarshal(data, &got)
+		switch {
+		case strings.Contains(r.URL.Path, "bad"):
+			w.WriteHeader(http.StatusUnauthorized)
+		case strings.Contains(r.URL.Path, "busy"):
+			w.WriteHeader(http.StatusConflict)
+		default:
+			io.WriteString(w, `{"ok":true,"result":[
+				{"update_id":10,"message":{"chat":{"id":42,"type":"private","first_name":"Andrii","username":"andrii"}}},
+				{"update_id":11,"message":{"chat":{"id":42,"type":"private","first_name":"Andrii","username":"andrii"}}},
+				{"update_id":12,"channel_post":{"chat":{"id":-1001234,"type":"channel","title":"Drops"}}},
+				{"update_id":13,"edited_message":{"chat":{"id":7,"type":"private"}}}
+			]}`)
+		}
+	}))
+	defer srv.Close()
+
+	n := New("")
+	n.telegramBase = srv.URL
+	chats, next, err := n.TelegramUpdates(context.Background(), "123:secret", 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/bot123:secret/getUpdates" || got["offset"] != float64(5) {
+		t.Fatalf("unexpected request: %s %v", path, got)
+	}
+	want := []TelegramChat{
+		{ID: "42", Name: "Andrii (@andrii)", Type: "private"},
+		{ID: "-1001234", Name: "Drops", Type: "channel"},
+	}
+	if len(chats) != len(want) || chats[0] != want[0] || chats[1] != want[1] {
+		t.Fatalf("chats = %+v, want %+v", chats, want)
+	}
+	if next != 14 {
+		t.Fatalf("next offset = %d, want 14 so every update is acknowledged", next)
+	}
+
+	for _, token := range []string{"bad", "busy"} {
+		_, off, err := n.TelegramUpdates(context.Background(), token, 5, 0)
+		if err == nil || strings.Contains(err.Error(), token) || off != 5 {
+			t.Fatalf("%s: want an error without the token and the offset kept, got %v, %d", token, err, off)
+		}
+	}
+}
+
 func TestDiscordDisablesMentionsAndRefusesRedirects(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

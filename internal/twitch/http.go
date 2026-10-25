@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"sync"
@@ -132,9 +133,7 @@ func (h *HTTP) once(ctx context.Context, method, rawURL string, body []byte, hea
 	if err != nil {
 		return nil, err
 	}
-	for k, vs := range header {
-		req.Header[k] = vs
-	}
+	maps.Copy(req.Header, header)
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", h.userAgent)
 	}

@@ -54,6 +54,18 @@ console window so you can watch the log. They can be combined. The first run
 downloads the [go-winres](https://github.com/tc-hib/go-winres) resource tool through
 Go's module proxy.
 
+If they're installed, `build.bat` then:
+
+- compresses the exe with [UPX](https://upx.github.io), from about 9 MB to under
+  3 MB. Some antivirus programs distrust UPX-packed files; if yours flags the exe,
+  build with UPX off your PATH.
+- packs it into `dist\TwitchMiner-<version>-windows-<arch>.rar` with
+  [WinRAR](https://www.win-rar.com). WinRAR's install folder is found even when it
+  isn't on your PATH.
+
+Each step is skipped, with a note, when its tool is missing. Quit TwitchMiner from the
+tray before building: Windows locks a running `dist\twitchminer.exe`.
+
 On other systems, or for a plain build without the icon:
 
 ```bash
@@ -69,30 +81,52 @@ Treat that file like a password. **Settings → Log out of Twitch** forgets it.
 TwitchMiner logs in as Twitch's Android TV app, one of the few clients Twitch still
 allows for device-code login. Twitch hides its campaign list from this login type, so
 TwitchMiner finds campaigns for the games on your watch list through their live
-channels. It asks each drops-enabled stream which campaigns it offers, and watches a
-channel that offers the campaign. These show as **found on stream** in Inventory.
-Twitch doesn't report whether your game account is linked for them, so check on
-Twitch. Games that aren't on your watch list can only be mined once you've started
-their campaign on Twitch.
+channels. It asks the game's drops-enabled streams and its most-watched streams which
+campaigns they offer, and watches a channel that offers the campaign. Twitch's
+drops-enabled tag isn't reliable, which is why both lists are asked. These campaigns
+show as **found on stream** in Inventory. Twitch doesn't report whether your game
+account is linked for them, so check on Twitch. Games that aren't on your watch list
+can only be mined once you've started their campaign on Twitch.
+
+A campaign can only be found once it has started and one of its channels is live.
+While a listed game has nothing to mine, TwitchMiner looks again every 5 minutes by
+default; change this in **Settings → Checks & connection**, or press **Check for
+campaigns** to look right away. A campaign you've already finished stops being
+offered by its channels, so it won't be found again.
 
 ## Use it
 
 - **Dashboard** shows the drop being mined, the mining queue, the console, and the
   tracked channels. Click a channel to watch it. Picking a channel of another game
   switches to manual mode until you go back to auto. **Pause** stops watching until
-  you resume. Drops Twitch reports as ready are still claimed while paused.
+  you resume. Drops Twitch reports as ready are still claimed while paused. **Check
+  for campaigns** reloads the inventory now; next to it you can see when campaigns
+  were last checked and when the next check is due.
 - **Games** is your watch list. Search to add games; it suggests the ones with
   campaigns first, then any matching Twitch category. When Twitch hides its campaign
   list from your login, a newly added game's live channels are searched for campaigns
-  right away. Drag games to set their priority. The list also has two switches:
+  right away. Each game shows its cover art, even when it has no campaign running.
+  Drag games to set their priority. The list also has two switches:
   - **Mine the campaign that ends soonest first** orders your listed games by their
     earliest-ending campaign, so time-limited rewards aren't missed. List order breaks
     ties.
   - **Only mine games on this list**: turn it off to mine other eligible games once
     the listed ones run out.
 - **Inventory** lists campaigns with their drops, progress and account-link status.
-- **Settings** chooses which reward types count, ignores drops by name, sets campaign
-  alerts, and sets a proxy.
+- **Settings** chooses which reward types count, ignores drops by name, sets how
+  often to reload the inventory and look for new campaigns, sets campaign alerts, and
+  sets a proxy.
+
+TwitchMiner looks after itself while it runs:
+
+- After the computer wakes from sleep, it reconnects to Twitch and checks for
+  campaigns right away, instead of waiting for its next scheduled check.
+- If a stream ends without Twitch saying so, it notices within about 30 seconds and
+  switches channel.
+- An unexpected internal error is logged and recovered from, instead of closing the
+  app. If mining itself hit the error, mining restarts after 30 seconds.
+- When Twitch changes something TwitchMiner relies on, the dashboard shows a "needs
+  an update" banner with a link to the latest release, and you get an alert.
 
 ### Alerts
 
@@ -104,12 +138,18 @@ events you want:
 - **Campaign completed:** every drop in a campaign is claimed.
 - **Login needed:** Twitch logged the miner out. The message includes the new
   activation code, so you can log back in from your phone.
+- **Update needed:** Twitch stopped accepting a request TwitchMiner relies on, so
+  mining may not work until you update.
 
-All four are on by default. Then connect a channel and use **Send test**:
+All five are on by default. Then connect a channel and use **Send test**:
 
-- **Telegram:** create a bot with [@BotFather](https://t.me/BotFather) and paste its
-  token. Message the bot once, then enter your chat ID, or add the bot to a channel
-  and enter `@channelname`.
+- **Telegram:** create a bot with [@BotFather](https://t.me/BotFather), paste its
+  token and press **Save** with the chat ID empty. Then send the bot any message: it
+  replies with your chat ID, and your chat appears under the fields with a **Use**
+  button that saves it. For a channel, add the bot to it and post there, or enter
+  `@channelname`. While it waits for that message, TwitchMiner reads the bot's
+  messages, so it can't work if another program reads them too (it says so if that
+  happens).
 - **Discord:** create a webhook in Server Settings → Integrations → Webhooks and paste
   its URL.
 
@@ -165,8 +205,8 @@ The code is laid out as follows:
   selection and watching.
 - `internal/web` has the dashboard server, which pushes live state over
   Server-Sent Events, and the plain HTML, CSS and JavaScript frontend in `static/`.
-
-- `internal/notify` sends Telegram and Discord alerts.
+- `internal/notify` sends Telegram and Discord alerts, and reads the Telegram bot's
+  messages to find a chat ID.
 
 The frontend uses no framework or build step. `static/app.css` is the shared base
 style, and `static/dashboard.css` builds on its color tokens.
@@ -191,5 +231,6 @@ The [release workflow](.github/workflows/release.yml) then:
 ## Not ported yet
 
 These Python features aren't in the Go version yet: claimed-drop history and CSV
-export, claim notifications, mining hours, a dashboard password, channel ban
-detection, diagnostics dumps, and translations.
+export, desktop notifications (claims are alerted through Telegram or Discord),
+mining hours, a dashboard password, channel ban detection, diagnostics dumps, and
+translations.

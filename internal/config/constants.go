@@ -60,6 +60,9 @@ func SmartTV() ClientInfo {
 // WebURL is the public site, used for channel pages and spade discovery.
 const WebURL = "https://www.twitch.tv"
 
+// ReleasesURL is where updates of this app are published.
+const ReleasesURL = "https://github.com/AndreyKarm/TwitchMiner/releases"
+
 // PubSub topic prefixes.
 const (
 	TopicUserDrops          = "user-drop-events"

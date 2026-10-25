@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -21,10 +23,11 @@ const (
 	AlertDropClaimed       = "drop_claimed"
 	AlertCampaignCompleted = "campaign_completed"
 	AlertLoginRequired     = "login_required"
+	AlertUpdateNeeded      = "update_needed"
 )
 
 // AlertEvents lists every alert event; all are on by default.
-var AlertEvents = []string{AlertCampaignStarted, AlertDropClaimed, AlertCampaignCompleted, AlertLoginRequired}
+var AlertEvents = []string{AlertCampaignStarted, AlertDropClaimed, AlertCampaignCompleted, AlertLoginRequired, AlertUpdateNeeded}
 
 // Settings are the user's persisted preferences.
 type Settings struct {
@@ -43,6 +46,9 @@ type Settings struct {
 	ConnectionQuality int `json:"connection_quality"`
 	// RefreshIntervalMinutes is how often the inventory is reloaded.
 	RefreshIntervalMinutes int `json:"minimum_refresh_interval_minutes"`
+	// CampaignCheckMinutes is how often to look for new campaigns while a
+	// listed game has nothing to mine and Twitch hides its campaign list.
+	CampaignCheckMinutes int `json:"campaign_check_minutes"`
 	// Proxy is an optional http(s) or socks5 proxy URL.
 	Proxy string `json:"proxy"`
 	// PriorityEndingSoonest orders the listed games by their soonest-ending
@@ -104,6 +110,7 @@ func Defaults() Settings {
 		DropNameBlacklist:      []string{},
 		ConnectionQuality:      1,
 		RefreshIntervalMinutes: 30,
+		CampaignCheckMinutes:   5,
 	}
 }
 
@@ -113,13 +120,9 @@ func (s Settings) Clone() Settings {
 	out.GamesToWatch = append([]string{}, s.GamesToWatch...)
 	out.DropNameBlacklist = append([]string{}, s.DropNameBlacklist...)
 	out.MiningBenefits = make(map[string]bool, len(s.MiningBenefits))
-	for k, v := range s.MiningBenefits {
-		out.MiningBenefits[k] = v
-	}
+	maps.Copy(out.MiningBenefits, s.MiningBenefits)
 	out.AlertEvents = make(map[string]bool, len(s.AlertEvents))
-	for k, v := range s.AlertEvents {
-		out.AlertEvents[k] = v
-	}
+	maps.Copy(out.AlertEvents, s.AlertEvents)
 	return out
 }
 
@@ -147,6 +150,7 @@ func (s *Settings) Normalize() error {
 	s.AlertEvents = normalizeFlags(s.AlertEvents, AlertEvents)
 	s.ConnectionQuality = min(max(s.ConnectionQuality, 1), 6)
 	s.RefreshIntervalMinutes = min(max(s.RefreshIntervalMinutes, 5), 24*60)
+	s.CampaignCheckMinutes = min(max(s.CampaignCheckMinutes, 1), 24*60)
 	s.Proxy = strings.TrimSpace(s.Proxy)
 	if s.Proxy != "" {
 		u, err := url.Parse(s.Proxy)
@@ -213,14 +217,7 @@ func normalizeFlags(flags map[string]bool, known []string) map[string]bool {
 	return out
 }
 
-func isBenefitType(t string) bool {
-	for _, b := range BenefitTypes {
-		if b == t {
-			return true
-		}
-	}
-	return false
-}
+func isBenefitType(t string) bool { return slices.Contains(BenefitTypes, t) }
 
 // UniqueFold trims entries, drops blanks and removes case-insensitive
 // duplicates while keeping the first spelling and the original order.

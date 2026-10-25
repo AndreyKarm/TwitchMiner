@@ -23,10 +23,15 @@ import (
 // GQL for the current drop, or estimates a minute as a last resort.
 func (m *Miner) watchLoop(ctx context.Context) {
 	nextProgress := time.Now().Add(20 * time.Second)
+	var failCh *Channel
+	fails := 0
 	for {
 		ch := m.waitForWatching(ctx)
 		if ch == nil {
 			return
+		}
+		if ch != failCh {
+			failCh, fails = ch, 0
 		}
 		m.mu.Lock()
 		if !ch.Online() {
@@ -41,8 +46,16 @@ func (m *Miner) watchLoop(ctx context.Context) {
 
 		started := time.Now()
 		ok := m.sendWatch(ctx, ch, stream)
-		if !ok {
-			slog.Debug("watch request failed", "channel", ch.Login)
+		if ok {
+			fails = 0
+		} else {
+			fails++
+			slog.Debug("watch request failed", "channel", ch.Login, "failures", fails)
+			// Failures that persist usually mean the stream ended and its
+			// stream-down event was missed, so ask Twitch directly.
+			if failsNeedStatusCheck(fails) {
+				m.goSafe("stream status check", func() { m.updateStream(ctx, ch) })
+			}
 		}
 		m.watchSleep(ctx, config.WatchPoll-time.Since(started))
 		if ctx.Err() != nil {
@@ -87,6 +100,12 @@ func (m *Miner) watchLoop(ctx context.Context) {
 		}
 		m.mu.Unlock()
 	}
+}
+
+// failsNeedStatusCheck re-checks the stream after 3 failed watches (about
+// 30 seconds), then every 30 failures while they continue.
+func failsNeedStatusCheck(fails int) bool {
+	return fails == 3 || fails > 0 && fails%30 == 0
 }
 
 func (m *Miner) waitForWatching(ctx context.Context) *Channel {
@@ -289,7 +308,7 @@ func playlistURLs(playlist string, base *url.URL, master bool) []string {
 	}
 	var out []string
 	pending := false
-	for _, raw := range strings.Split(playlist, "\n") {
+	for raw := range strings.SplitSeq(playlist, "\n") {
 		line := strings.TrimSpace(raw)
 		switch {
 		case line == "":
@@ -322,7 +341,9 @@ func playlistURLs(playlist string, base *url.URL, master bool) []string {
 
 var (
 	settingsPattern = regexp.MustCompile(`(?i)src="(https://[\w.]+/config/settings\.[0-9a-f]{32}\.js)"`)
-	spadePattern    = regexp.MustCompile(`(?i)"beacon_?url": ?"(https://[^"]+)"`)
+	// The settings script lists beacon_url (beacon.twitch.tv) before
+	// spade_url; only spade.twitch.tv takes minute-watched events.
+	spadePattern = regexp.MustCompile(`(?i)"spade_?url": ?"(https://[^"]+)"`)
 )
 
 // spadeURL scrapes the telemetry endpoint from the channel page, or from

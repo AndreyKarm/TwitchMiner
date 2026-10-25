@@ -8,12 +8,15 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/AndreyKarm/TwitchMiner/internal/config"
 )
 
-// Topic is a subscription and the handler for its messages. Handlers run
-// on their own goroutine so they may block.
+// Topic is a subscription and the handler for its messages. A topic's
+// messages are handled one at a time, in the order they arrived, off the
+// connection's read loop, so a handler may block; it then delays only its
+// own topic.
 type Topic struct {
 	ID     string
 	Handle func(msg json.RawMessage)
@@ -39,6 +42,54 @@ type Pool struct {
 	ctx     context.Context
 	conns   []*conn
 	stopped bool
+
+	queue serial
+
+	authMu      sync.Mutex
+	onAuthError func()
+	lastAuthErr time.Time
+}
+
+// authErrorEvery limits how often onAuthError runs; every LISTEN batch on
+// every connection can report the same bad token.
+const authErrorEvery = time.Minute
+
+// OnAuthError registers fn to run when Twitch rejects the token for a
+// subscription. It runs at most once per authErrorEvery, on its own goroutine.
+func (p *Pool) OnAuthError(fn func()) {
+	p.authMu.Lock()
+	p.onAuthError = fn
+	p.authMu.Unlock()
+}
+
+func (p *Pool) authFailed() {
+	p.authMu.Lock()
+	fn := p.onAuthError
+	due := fn != nil && time.Since(p.lastAuthErr) >= authErrorEvery
+	if due {
+		p.lastAuthErr = time.Now()
+	}
+	p.authMu.Unlock()
+	if due {
+		go fn()
+	}
+}
+
+// Reconnect drops and reopens every connection, for example after the
+// computer slept and the sockets may be dead without knowing it.
+func (p *Pool) Reconnect() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.conns {
+		signal(c.reconnect)
+	}
+}
+
+// dispatch hands a message to its topic's handler, in arrival order.
+func (p *Pool) dispatch(topic string, msg json.RawMessage) {
+	if h := p.handler(topic); h != nil {
+		p.queue.run(topic, func() { h(msg) })
+	}
 }
 
 // New creates a pool. token supplies the OAuth token for LISTEN requests.
@@ -122,16 +173,6 @@ func (p *Pool) Remove(ids []string) {
 		recycled = p.conns[i].add(recycled)
 	}
 	p.reportLocked()
-}
-
-// Reconnect forces every connection to reconnect, for example after the
-// token changed.
-func (p *Pool) Reconnect() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, c := range p.conns {
-		signal(c.reconnect)
-	}
 }
 
 func (p *Pool) owner(id string) *conn {

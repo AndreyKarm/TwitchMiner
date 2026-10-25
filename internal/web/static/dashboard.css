@@ -222,14 +222,30 @@ input[type='checkbox'] {
 	color: var(--muted);
 }
 
+/* A number input with its unit shown inside the box, e.g. "30   min". */
+.unit-input {
+	position: relative;
+	display: block;
+}
+
+.unit-input input {
+	width: 100%;
+	padding-right: 3.2rem;
+}
+
+.field .unit {
+	position: absolute;
+	top: 50%;
+	right: 0.9rem;
+	transform: translateY(-50%);
+	font-size: 0.85rem;
+	pointer-events: none;
+}
+
 .field-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
 	gap: 1rem;
-}
-
-.field-wide {
-	grid-column: 1 / -1;
 }
 
 .row-end {
@@ -490,7 +506,28 @@ input[type='checkbox'] {
 	color: var(--muted);
 }
 
-.statusbar #pause {
+.banner {
+	margin: 0 0 1rem;
+	padding: 0.85rem 1rem;
+	border: 1px solid color-mix(in srgb, #ffb86b 55%, transparent);
+	border-radius: 0.75rem;
+	background: color-mix(in srgb, #ffb86b 10%, transparent);
+	color: var(--text);
+	font-size: 0.9rem;
+	line-height: 1.5;
+}
+
+.banner strong {
+	color: #ffb86b;
+}
+
+.banner a {
+	color: #ffb86b;
+	font-weight: 600;
+}
+
+.statusbar #pause,
+.statusbar #check-now {
 	padding: 0.3rem 0.8rem;
 	font-size: 0.78rem;
 	border-radius: 999px;
@@ -512,6 +549,42 @@ input[type='checkbox'] {
 	gap: 0.5rem;
 	font-size: 0.92rem;
 	margin: 1.25rem 0 0.4rem;
+}
+
+.chat-finder {
+	margin-top: 0.9rem;
+	padding: 0.8rem 0.9rem;
+	border: 1px dashed var(--line-strong);
+	border-radius: 0.75rem;
+	background: var(--tint);
+}
+
+.chat-finder-hint {
+	font-size: 0.85rem;
+	color: var(--text);
+}
+
+.chat-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	margin-top: 0.6rem;
+	padding-top: 0.6rem;
+	border-top: 1px solid var(--secondary);
+}
+
+.chat-row-body {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.chat-row-body .name {
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .alert-actions {
@@ -1180,15 +1253,6 @@ a.campaign-title:hover {
 	border-color: var(--line);
 }
 
-.proxy-row {
-	align-items: flex-end;
-	margin: 1rem 0 0;
-}
-
-.proxy-row .field {
-	flex: 1;
-}
-
 .account-panel {
 	display: flex;
 	align-items: center;
@@ -1503,15 +1567,6 @@ a.campaign-title:hover {
 	opacity: 0.3;
 }
 
-.inline-form {
-	display: flex;
-	gap: 0.5rem;
-	margin-bottom: 0.6rem;
-}
-
-.inline-form button {
-	padding: 0.7rem 1.1rem;
-}
 
 /* ---------- login ---------- */
 
@@ -1681,10 +1736,6 @@ a.campaign-title:hover {
 
 	.campaign-grid {
 		grid-template-columns: 1fr;
-	}
-
-	.proxy-row {
-		flex-wrap: wrap;
 	}
 
 	.toolbar-right,

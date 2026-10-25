@@ -25,7 +25,7 @@ func (m *Miner) discoverCampaigns(ctx context.Context, skip map[string]any) (map
 
 	found := map[string]map[string]any{}
 	for _, name := range games {
-		chs, err := m.liveStreams(ctx, &Game{Name: name, Slug: slugify(name)}, 30)
+		chs, err := m.discoveryChannels(ctx, &Game{Name: name, Slug: slugify(name)})
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -62,6 +62,34 @@ func (m *Miner) discoverCampaigns(ctx context.Context, skip map[string]any) (map
 		out[id] = c
 	}
 	return out, nil
+}
+
+// discoveryChannels lists the live channels worth asking about campaigns:
+// those Twitch tags as drops-enabled plus the most-watched ones. The tag
+// alone isn't reliable; channels carrying a running campaign can be missing
+// from the filtered directory.
+func (m *Miner) discoveryChannels(ctx context.Context, g *Game) ([]*Channel, error) {
+	tagged, taggedErr := m.liveStreams(ctx, g, 30, true)
+	top, topErr := m.liveStreams(ctx, g, 30, false)
+	if taggedErr != nil && topErr != nil {
+		return nil, taggedErr
+	}
+	return mergeChannels(tagged, top), nil
+}
+
+// mergeChannels joins channel lists, keeping the first copy of each channel.
+func mergeChannels(lists ...[]*Channel) []*Channel {
+	seen := map[string]bool{}
+	var out []*Channel
+	for _, l := range lists {
+		for _, ch := range l {
+			if !seen[ch.ID] {
+				seen[ch.ID] = true
+				out = append(out, ch)
+			}
+		}
+	}
+	return out
 }
 
 // addDiscovered records that ch offers campaign c, building the campaign the

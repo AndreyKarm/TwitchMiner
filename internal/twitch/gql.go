@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/AndreyKarm/TwitchMiner/internal/config"
 )
 
 // GQLError is an error Twitch's GraphQL API returned that the client
@@ -21,6 +26,47 @@ type GQL struct {
 	http    *HTTP
 	auth    *Auth
 	limiter *RateLimiter
+
+	outdatedMu sync.Mutex
+	// outdated holds persisted operations Twitch no longer recognizes.
+	outdated   map[string]bool
+	onOutdated func(ops []string)
+}
+
+// OnOutdated registers fn to receive the persisted operations Twitch no
+// longer recognizes, whenever that set changes. Twitch retires a query's
+// hash when its web client changes, and only an update of this app fixes
+// that. An empty list means everything works again.
+func (g *GQL) OnOutdated(fn func(ops []string)) {
+	g.outdatedMu.Lock()
+	g.onOutdated = fn
+	g.outdatedMu.Unlock()
+}
+
+// setOutdated records whether op works and reports a change.
+func (g *GQL) setOutdated(op string, outdated bool) {
+	if op == "" {
+		return
+	}
+	g.outdatedMu.Lock()
+	if g.outdated[op] == outdated {
+		g.outdatedMu.Unlock()
+		return
+	}
+	if g.outdated == nil {
+		g.outdated = map[string]bool{}
+	}
+	if outdated {
+		g.outdated[op] = true
+	} else {
+		delete(g.outdated, op)
+	}
+	ops := slices.Sorted(maps.Keys(g.outdated))
+	fn := g.onOutdated
+	g.outdatedMu.Unlock()
+	if fn != nil {
+		fn(ops)
+	}
 }
 
 // NewGQL builds a client using auth for credentials.
@@ -52,10 +98,18 @@ func (g *GQL) Do(ctx context.Context, ops ...any) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Error replies don't always name their operation, so take the names
+	// from the request.
+	names := make([]string, len(ops))
+	for i, op := range ops {
+		if o, ok := op.(config.Op); ok {
+			names[i] = o.OperationName
+		}
+	}
 	backoff := NewBackoff(time.Minute)
 	singleRetry := true
 	for {
-		results, retry, err := g.attempt(ctx, body, len(ops), &singleRetry)
+		results, retry, err := g.attempt(ctx, body, names, &singleRetry)
 		if err != nil || !retry {
 			return results, err
 		}
@@ -69,7 +123,10 @@ func (g *GQL) Do(ctx context.Context, ops ...any) ([]map[string]any, error) {
 	}
 }
 
-func (g *GQL) attempt(ctx context.Context, body []byte, count int, singleRetry *bool) ([]map[string]any, bool, error) {
+// attempt sends one request. names holds each operation's name, "" for
+// raw queries.
+func (g *GQL) attempt(ctx context.Context, body []byte, names []string, singleRetry *bool) ([]map[string]any, bool, error) {
+	count := len(names)
 	release, err := g.limiter.Acquire(ctx)
 	if err != nil {
 		return nil, false, err
@@ -100,7 +157,11 @@ func (g *GQL) attempt(ctx context.Context, body []byte, count int, singleRetry *
 		return nil, false, fmt.Errorf("gql: expected %d responses, got %d", count, len(results))
 	}
 
-	for _, r := range results {
+	for i, r := range results {
+		name := names[i]
+		if name == "" {
+			name = operationName(r)
+		}
 		if msg, ok := r["error"].(string); ok {
 			detail, _ := r["message"].(string)
 			if strings.EqualFold(msg, "Unauthorized") {
@@ -111,6 +172,7 @@ func (g *GQL) attempt(ctx context.Context, body []byte, count int, singleRetry *
 		}
 		errs, _ := r["errors"].([]any)
 		if len(errs) == 0 {
+			g.setOutdated(names[i], false)
 			continue
 		}
 		var unhandled []string
@@ -121,11 +183,14 @@ func (g *GQL) attempt(ctx context.Context, body []byte, count int, singleRetry *
 			case "service error", "PersistedQueryNotFound":
 				if *singleRetry {
 					*singleRetry = false
-					slog.Warn("retrying gql request once", "error", msg, "operation", operationName(r))
+					slog.Warn("retrying gql request once", "error", msg, "operation", name)
 					return nil, true, nil
 				}
+				if msg == "PersistedQueryNotFound" {
+					g.setOutdated(names[i], true)
+				}
 				unhandled = append(unhandled, msg)
-			case "service timeout", "service unavailable", "context deadline exceeded":
+			case "service timeout", "request cancelled", "service unavailable", "context deadline exceeded":
 				return nil, true, nil
 			case "server error":
 				// Partial failure: drop the broken field and keep the rest.
@@ -135,12 +200,14 @@ func (g *GQL) attempt(ctx context.Context, body []byte, count int, singleRetry *
 			}
 		}
 		if len(unhandled) > 0 {
-			return nil, false, &GQLError{Message: strings.Join(unhandled, "; ") + " (" + operationName(r) + ")"}
+			return nil, false, &GQLError{Message: strings.Join(unhandled, "; ") + " (" + name + ")"}
 		}
+		g.setOutdated(names[i], false)
 	}
 	return results, false, nil
 }
 
+// operationName reads the operation a reply names, for raw queries.
 func operationName(r map[string]any) string {
 	if ext, ok := r["extensions"].(map[string]any); ok {
 		if name, ok := ext["operationName"].(string); ok {
@@ -198,9 +265,7 @@ func Decode(v any, out any) error {
 // nested objects are merged key by key.
 func MergeData(primary, secondary map[string]any) map[string]any {
 	out := make(map[string]any, len(primary)+len(secondary))
-	for k, v := range secondary {
-		out[k] = v
-	}
+	maps.Copy(out, secondary)
 	for k, pv := range primary {
 		if pm, ok := pv.(map[string]any); ok {
 			if sm, ok := secondary[k].(map[string]any); ok {

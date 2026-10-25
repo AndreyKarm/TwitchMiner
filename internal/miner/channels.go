@@ -37,14 +37,19 @@ func (r *rawStreamInfo) toStream() *Stream {
 	return s
 }
 
-// liveStreams lists live, drops-enabled channels for a game.
-func (m *Miner) liveStreams(ctx context.Context, g *Game, limit int) ([]*Channel, error) {
+// liveStreams lists live channels for a game, only those Twitch tags as
+// drops-enabled when dropsOnly is set.
+func (m *Miner) liveStreams(ctx context.Context, g *Game, limit int, dropsOnly bool) ([]*Channel, error) {
+	filters := []any{}
+	if dropsOnly {
+		filters = append(filters, "DROPS_ENABLED")
+	}
 	op := config.OpGameDirectory.With(map[string]any{
 		"limit": limit,
 		"slug":  g.Slug,
 		"options": map[string]any{
 			"includeRestricted": []any{"SUB_ONLY_LIVE"},
-			"systemFilters":     []any{"DROPS_ENABLED"},
+			"systemFilters":     filters,
 		},
 	})
 	resp, err := m.gql.Do1(ctx, op)
@@ -72,7 +77,7 @@ func (m *Miner) liveStreams(ctx context.Context, g *Game, limit int) ([]*Channel
 		if game == nil {
 			game = g
 		}
-		ch.stream = &Stream{BroadcastID: node.ID, Viewers: node.ViewersCount, DropsEnabled: true, Game: game, Title: node.Title}
+		ch.stream = &Stream{BroadcastID: node.ID, Viewers: node.ViewersCount, DropsEnabled: dropsOnly, Game: game, Title: node.Title}
 		out = append(out, ch)
 	}
 	return out, nil
@@ -92,6 +97,7 @@ func (m *Miner) bulkCheckOnline(ctx context.Context, chs []*Channel) error {
 	)
 	for batch := range slices.Chunk(chs, 20) {
 		wg.Go(func() {
+			defer m.recoverPanic("channel status")
 			ops := make([]any, len(batch))
 			for i, ch := range batch {
 				ops[i] = config.OpGetStreamInfo.With(map[string]any{"channel": ch.Login})
@@ -162,6 +168,7 @@ func (m *Miner) checkOnlineLocked(ch *Channel) {
 	}
 	ctx := m.sctx
 	ch.pendingUp = time.AfterFunc(config.OnlineDelay, func() {
+		defer m.recoverPanic("channel status check")
 		m.mu.Lock()
 		ch.pendingUp = nil
 		m.mu.Unlock()

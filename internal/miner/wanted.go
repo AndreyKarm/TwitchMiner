@@ -34,7 +34,8 @@ type WantedGame struct {
 func (m *Miner) wantedDropsLocked(c *Campaign, now time.Time) []WantedDrop {
 	var out []WantedDrop
 	for _, d := range c.Drops {
-		if !d.IsWatchDrop() || d.IsClaimed || !d.EndsAt.After(now) || !d.IsMineable() {
+		// wantedUnclaimedBenefits skips claimed and unmineable drops.
+		if !d.IsWatchDrop() || !d.EndsAt.After(now) {
 			continue
 		}
 		if bens := d.wantedUnclaimedBenefits(m.policy.benefits); len(bens) > 0 {

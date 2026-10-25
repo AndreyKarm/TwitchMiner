@@ -1,7 +1,6 @@
 package miner
 
 import (
-	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -174,13 +173,12 @@ func (d *Drop) IsWatchDrop() bool { return d.RequiredMinutes > 0 }
 func (d *Drop) RemainingMinutes() int { return d.RequiredMinutes - d.CurrentMinutes() }
 
 // TotalRemainingMinutes includes the longest unclaimed prerequisite chain.
-func (d *Drop) TotalRemainingMinutes() int { return d.chainMinutes(true, map[string]bool{}) }
+func (d *Drop) TotalRemainingMinutes() int { return d.chainRemaining(map[string]bool{}) }
 
-// TotalRequiredMinutes includes the longest prerequisite chain.
-func (d *Drop) TotalRequiredMinutes() int { return d.chainMinutes(false, map[string]bool{}) }
-
-func (d *Drop) chainMinutes(remaining bool, visiting map[string]bool) int {
-	if visiting[d.ID] || remaining && d.IsClaimed {
+// chainRemaining skips drops already on the path, so a precondition cycle
+// in bad data can't recurse forever.
+func (d *Drop) chainRemaining(visiting map[string]bool) int {
+	if visiting[d.ID] || d.IsClaimed {
 		return 0
 	}
 	visiting[d.ID] = true
@@ -188,13 +186,10 @@ func (d *Drop) chainMinutes(remaining bool, visiting map[string]bool) int {
 	best := 0
 	for _, id := range d.Preconditions {
 		if pre := d.Campaign.dropByID[id]; pre != nil {
-			best = max(best, pre.chainMinutes(remaining, visiting))
+			best = max(best, pre.chainRemaining(visiting))
 		}
 	}
-	if remaining {
-		return d.RemainingMinutes() + best
-	}
-	return d.RequiredMinutes + best
+	return d.RemainingMinutes() + best
 }
 
 // Progress is the watched fraction, 0..1.
@@ -233,13 +228,20 @@ func (d *Drop) IsMineable() bool {
 	return !d.IsClaimed && d.Campaign.evaluation().Mineable[d.ID]
 }
 
+func (d *Drop) progressable() bool {
+	return d.IsMineable() && d.preconditionsMet() && d.IsWatchDrop()
+}
+
 func (d *Drop) baseEarnConditions() bool {
-	return d.IsMineable() && d.preconditionsMet() && d.IsWatchDrop() &&
-		d.ExtraMinutes < config.MaxExtraMinutes
+	return d.progressable() && d.ExtraMinutes < config.MaxExtraMinutes
+}
+
+func (d *Drop) running(now time.Time) bool {
+	return !now.Before(d.StartsAt) && now.Before(d.EndsAt)
 }
 
 func (d *Drop) baseCanEarn(now time.Time) bool {
-	return d.baseEarnConditions() && !now.Before(d.StartsAt) && now.Before(d.EndsAt)
+	return d.baseEarnConditions() && d.running(now)
 }
 
 func (d *Drop) canEarnWithin(now, stamp time.Time) bool {
@@ -268,7 +270,7 @@ func (d *Drop) rewardsText() string {
 }
 
 func (d *Drop) wantedUnclaimedBenefits(allowed map[string]bool) []string {
-	if d.IsClaimed || !d.IsMineable() {
+	if !d.IsMineable() {
 		return nil
 	}
 	var out []string
@@ -280,14 +282,18 @@ func (d *Drop) wantedUnclaimedBenefits(allowed map[string]bool) []string {
 	return out
 }
 
-// updateRealMinutes applies an authoritative progress delta.
+// updateRealMinutes applies an authoritative progress delta and drops any
+// local estimate, even when the delta is zero. The estimate cap is ignored
+// here so real progress can revive a drop the estimate had given up on.
 func (d *Drop) updateRealMinutes(delta int) bool {
-	if delta == 0 || d.RealMinutes+delta < 0 || !d.CanEarn(nil) {
+	now := time.Now()
+	if !d.progressable() || !d.running(now) || !d.Campaign.baseCanEarn(nil, false, now) {
 		return false
 	}
-	d.RealMinutes = min(d.RealMinutes+delta, d.RequiredMinutes)
-	d.ExtraMinutes = 0
-	return true
+	minutes := min(max(d.RealMinutes+delta, 0), d.RequiredMinutes)
+	changed := minutes != d.RealMinutes || d.ExtraMinutes != 0
+	d.RealMinutes, d.ExtraMinutes = minutes, 0
+	return changed
 }
 
 // bumpMinutes adds one estimated minute; it reports whether the estimate
@@ -454,19 +460,6 @@ func (c *Campaign) RemainingMinutes() int {
 	best := 0
 	for _, d := range c.mineableWatchDrops() {
 		best = max(best, d.TotalRemainingMinutes())
-	}
-	return best
-}
-
-// Availability is minutes left in the campaign per minute still needed;
-// lower values are more urgent.
-func (c *Campaign) Availability() float64 {
-	best := math.Inf(1)
-	now := time.Now()
-	for _, d := range c.mineableWatchDrops() {
-		if rem := d.TotalRemainingMinutes(); rem > 0 && now.Before(d.EndsAt) {
-			best = math.Min(best, d.EndsAt.Sub(now).Minutes()/float64(rem))
-		}
 	}
 	return best
 }

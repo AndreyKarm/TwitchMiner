@@ -71,6 +71,17 @@ func NewServer(hub *Hub, m *miner.Miner, settings *config.Store) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// net/http would recover a panic too, but the miner must check it
+	// didn't leave its state locked.
+	defer func() {
+		if rec := recover(); rec != nil {
+			if rec == http.ErrAbortHandler {
+				panic(rec)
+			}
+			s.miner.Recovered("dashboard request "+r.URL.Path, rec)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error, details are in the log"})
+		}
+	}()
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	s.mux.ServeHTTP(w, r)

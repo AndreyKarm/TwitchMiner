@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AndreyKarm/TwitchMiner/internal/config"
@@ -52,6 +53,7 @@ type policy struct {
 	keywordKey     string
 	allowUnlinked  bool
 	refreshMinutes int
+	checkMinutes   int
 }
 
 func newPolicy(s config.Settings) policy {
@@ -64,6 +66,7 @@ func newPolicy(s config.Settings) policy {
 		keywordKey:     strings.ToLower(strings.Join(s.DropNameBlacklist, "\x00")) + "\x01",
 		allowUnlinked:  s.AllowUnlinkedCampaigns,
 		refreshMinutes: s.RefreshIntervalMinutes,
+		checkMinutes:   s.CampaignCheckMinutes,
 	}
 }
 
@@ -119,7 +122,15 @@ type Miner struct {
 	printMu     sync.Mutex
 	lastPrinted string
 
-	seen *seenCampaigns
+	seen  *seenCampaigns
+	icons *gameIcons
+	chats chatFinder
+
+	// crashed is set when a panic ended the session.
+	crashed atomic.Bool
+	// outdatedAlerted holds GQL operations already reported as outdated.
+	outdatedMu      sync.Mutex
+	outdatedAlerted map[string]bool
 
 	mu                 sync.Mutex
 	policy             policy
@@ -171,6 +182,7 @@ func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI, dataD
 		gql:          twitch.NewGQL(h, auth),
 		ui:           ui,
 		seen:         loadSeenCampaigns(filepath.Join(dataDir, "seen-campaigns.json")),
+		icons:        loadGameIcons(filepath.Join(dataDir, "game-icons.json")),
 		stateCh:      make(chan struct{}, 1),
 		watchCh:      make(chan struct{}, 1),
 		watchRestart: make(chan struct{}, 1),
@@ -180,7 +192,10 @@ func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI, dataD
 		channels:     map[string]*Channel{},
 		dirty:        dirtyAll,
 		sctx:         context.Background(),
+
+		outdatedAlerted: map[string]bool{},
 	}
+	m.gql.OnOutdated(m.outdatedChanged)
 	auth.OnInvalid(func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -194,13 +209,21 @@ func New(settings *config.Store, h *twitch.HTTP, auth *twitch.Auth, ui UI, dataD
 // Run mines until ctx ends, logging in again whenever the token is lost.
 func (m *Miner) Run(ctx context.Context) {
 	m.ui.Publish("paused", m.Paused())
-	go m.uiLoop(ctx)
+	m.publishGameIcons(false)
+	m.syncChatFinder(m.settings.Get())
+	go m.keepRunning(ctx, "dashboard updates", m.uiLoop)
 	for ctx.Err() == nil {
 		err := m.auth.EnsureLogin(ctx, m.showLogin)
 		if err != nil {
 			return
 		}
 		m.runSession(ctx)
+		if m.crashed.Swap(false) {
+			m.print(fmt.Sprintf("Restarting mining in %d seconds after an internal error", int(crashPause.Seconds())))
+			if twitch.Sleep(ctx, crashPause) != nil {
+				return
+			}
+		}
 	}
 }
 
@@ -218,7 +241,9 @@ func (m *Miner) showLogin(s twitch.LoginState) {
 		m.loginAlertSent = m.loginAlertSent || alert
 		m.mu.Unlock()
 		if alert {
-			go m.sendAlerts(config.AlertLoginRequired, loginAlert(s.UserCode, s.VerificationURI))
+			m.goSafe("login alert", func() {
+				m.sendAlerts(config.AlertLoginRequired, loginAlert(s.UserCode, s.VerificationURI))
+			})
 		}
 	case "logged_in":
 		m.mu.Lock()
@@ -237,6 +262,11 @@ func (m *Miner) runSession(ctx context.Context) {
 	pool := pubsub.New(m.http.WebsocketClient, m.auth.Token, func(s pubsub.Status) {
 		m.ui.Publish("pubsub", s)
 	})
+	// PubSub refusing the token usually means it was revoked; ask Twitch, so
+	// a dead token leads to a new login instead of silent missing events.
+	pool.OnAuthError(func() {
+		m.goSafe("login check", func() { m.auth.Recheck(sctx) })
+	})
 
 	m.mu.Lock()
 	m.sctx, m.endSession, m.pool = sctx, cancel, pool
@@ -248,16 +278,24 @@ func (m *Miner) runSession(ctx context.Context) {
 	pool.Start(sctx)
 	uid := m.auth.UserID()
 	if err := pool.Add([]pubsub.Topic{
-		{ID: pubsub.TopicID(config.TopicUserDrops, uid), Handle: m.handleDrops},
-		{ID: pubsub.TopicID(config.TopicUserNotifications, uid), Handle: m.handleNotifications},
+		{ID: pubsub.TopicID(config.TopicUserDrops, uid), Handle: m.safeHandler("drop event", m.handleDrops)},
+		{ID: pubsub.TopicID(config.TopicUserNotifications, uid), Handle: m.safeHandler("notification", m.handleNotifications)},
 	}); err != nil {
 		slog.Error("subscribing user topics", "err", err)
 	}
 
 	var wg sync.WaitGroup
-	wg.Go(func() { m.watchLoop(sctx) })
+	wg.Go(func() { m.sessionTask("watch loop", cancel, func() { m.watchLoop(sctx) }) })
+	wg.Go(func() {
+		defer m.recoverPanic("game picture lookup")
+		m.lookupGameIcons(sctx)
+	})
+	wg.Go(func() {
+		defer m.recoverPanic("sleep detection")
+		m.watchForResume(sctx)
+	})
 	m.RequestInventoryRefresh()
-	m.stateLoop(sctx)
+	m.sessionTask("state loop", cancel, func() { m.stateLoop(sctx) })
 
 	cancel()
 	pool.Stop()
@@ -299,6 +337,7 @@ func (m *Miner) resetSession() {
 	m.sctx = context.Background()
 	m.dirty = dirtyAll
 	m.ui.Publish("pubsub", pubsub.Status{})
+	m.ui.Publish("checks", CheckSchedule{})
 }
 
 // --- public API used by the dashboard ---
@@ -333,7 +372,7 @@ func (m *Miner) SettingsChanged(s config.Settings) {
 	m.netQuality, m.netProxy = s.ConnectionQuality, s.Proxy
 	old, next := m.policy, newPolicy(s)
 	miningChanged := !old.sameMining(next)
-	refreshChanged := next.refreshMinutes != old.refreshMinutes
+	refreshChanged := next.refreshMinutes != old.refreshMinutes || next.checkMinutes != old.checkMinutes
 	m.policy = next
 	if miningChanged {
 		m.dirty |= dirtyInventory | dirtyWanted
@@ -342,12 +381,17 @@ func (m *Miner) SettingsChanged(s config.Settings) {
 	// Without Twitch's campaign list, a newly listed game's campaigns are
 	// only found by searching its channels, so search now rather than at the
 	// next periodic reload.
-	if m.catalogHidden && gamesAdded(old.games, next.games) {
+	added := gamesAdded(old.games, next.games)
+	if m.catalogHidden && added {
 		m.inventoryPending = true
 		signal(m.stateCh)
 	}
-	sctx, loaded := m.sctx, m.inventoryLoaded
+	sctx, loaded, inSession := m.sctx, m.inventoryLoaded, m.endSession != nil
 	m.mu.Unlock()
+
+	if added && inSession {
+		m.goSafe("game picture lookup", func() { m.lookupGameIcons(sctx) })
+	}
 
 	if netChanged {
 		if err := m.http.Configure(s.ConnectionQuality, s.Proxy); err != nil {
@@ -357,6 +401,7 @@ func (m *Miner) SettingsChanged(s config.Settings) {
 	if refreshChanged && loaded {
 		m.restartMaintenance(sctx)
 	}
+	m.syncChatFinder(s)
 	m.ui.Publish("settings", s.Public())
 }
 
@@ -431,12 +476,6 @@ func (m *Miner) changeStateLocked(s State) {
 	signal(m.stateCh)
 }
 
-func (m *Miner) changeState(s State) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.changeStateLocked(s)
-}
-
 // activatePendingLocked lets queued refreshes take over before the next wait.
 func (m *Miner) activatePendingLocked() {
 	if m.paused {
@@ -486,7 +525,6 @@ func (m *Miner) stateLoop(ctx context.Context) {
 			m.mu.Lock()
 			m.inventoryLoaded = true
 			m.inventoryFailures = 0
-			m.lastInventoryOK = time.Now()
 			m.changeStateLocked(StateGamesUpdate)
 			m.mu.Unlock()
 
@@ -500,7 +538,7 @@ func (m *Miner) stateLoop(ctx context.Context) {
 			m.restartWatchingLocked()
 			m.changeStateLocked(StateChannelsCleanup)
 			m.mu.Unlock()
-			go m.deliverStarted(alerts, seen)
+			m.goSafe("campaign alerts", func() { m.deliverStarted(alerts, seen) })
 
 		case StateChannelsCleanup:
 			m.setStatus("Cleaning up channels...")
@@ -548,6 +586,7 @@ func (m *Miner) inventoryFailed(ctx context.Context, err error) {
 	m.mu.Lock()
 	m.inventoryFailures++
 	delay := inventoryRetryDelay(m.inventoryFailures)
+	m.publishScheduleLocked(time.Now().Add(delay))
 	if m.inventoryLoaded {
 		m.changeStateLocked(StateChannelSwitch)
 	} else {
@@ -555,11 +594,11 @@ func (m *Miner) inventoryFailed(ctx context.Context, err error) {
 	}
 	m.mu.Unlock()
 	m.print(fmt.Sprintf("Loading the drops inventory failed, retrying in %d min: %v", int(delay.Minutes()), err))
-	go func() {
+	m.goSafe("inventory retry", func() {
 		if twitch.Sleep(ctx, delay) == nil {
 			m.RequestInventoryRefresh()
 		}
-	}()
+	})
 }
 
 // claimAvailable claims every finished drop of started campaigns.
@@ -699,7 +738,7 @@ func (m *Miner) fetchChannels(ctx context.Context) {
 	}
 	var directory []*Channel
 	for _, g := range noACL {
-		chs, err := m.liveStreams(ctx, g, 20)
+		chs, err := m.liveStreams(ctx, g, 20, true)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -750,8 +789,8 @@ func (m *Miner) fetchChannels(ctx context.Context) {
 		m.channelOrder = append(m.channelOrder, ch.ID)
 		id := ch.ID
 		topics = append(topics,
-			pubsub.Topic{ID: pubsub.TopicID(config.TopicChannelStreamState, id), Handle: func(msg json.RawMessage) { m.handleStreamState(id, msg) }},
-			pubsub.Topic{ID: pubsub.TopicID(config.TopicChannelUpdate, id), Handle: func(json.RawMessage) { m.handleStreamUpdate(id) }},
+			pubsub.Topic{ID: pubsub.TopicID(config.TopicChannelStreamState, id), Handle: m.safeHandler("stream event", func(msg json.RawMessage) { m.handleStreamState(id, msg) })},
+			pubsub.Topic{ID: pubsub.TopicID(config.TopicChannelUpdate, id), Handle: m.safeHandler("channel update", func(json.RawMessage) { m.handleStreamUpdate(id) })},
 		)
 	}
 	if m.pool != nil {
@@ -761,9 +800,13 @@ func (m *Miner) fetchChannels(ctx context.Context) {
 	}
 
 	// Keep watching the same channel through the refresh when we still can.
+	// Otherwise stop: a channel left out of the list gets no more status
+	// updates, so it would be watched long after its stream ends.
 	if m.watching != nil {
 		if ch := m.channels[m.watching.ID]; ch != nil && m.canWatchLocked(ch) {
 			m.watchLocked(ch, false)
+		} else {
+			m.stopWatchingLocked()
 		}
 	}
 	for _, ch := range ordered {

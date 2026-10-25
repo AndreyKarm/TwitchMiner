@@ -330,6 +330,18 @@ func (a *Auth) refresh(ctx context.Context) (bool, error) {
 	return a.validate(ctx)
 }
 
+// Recheck validates the token after a Twitch service refused it, and drops
+// it if Twitch's validation endpoint rejects it too. A network failure
+// leaves the token alone.
+func (a *Auth) Recheck(ctx context.Context) {
+	if a.Token() == "" {
+		return
+	}
+	if ok, err := a.validate(ctx); err == nil && !ok {
+		a.Invalidate()
+	}
+}
+
 // Invalidate drops an access token Twitch has rejected and notifies the
 // miner. The refresh token is kept so the next login attempt can renew it.
 func (a *Auth) Invalidate() {

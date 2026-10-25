@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -87,11 +88,7 @@ func (m *Miner) collectStartedLocked() (alerts []notify.Message, snapshot map[st
 	if !changed {
 		return alerts, nil
 	}
-	snapshot = make(map[string]time.Time, len(seen.ids))
-	for k, v := range seen.ids {
-		snapshot[k] = v
-	}
-	return alerts, snapshot
+	return alerts, maps.Clone(seen.ids)
 }
 
 // wouldMineLocked reports whether c belongs to a game the miner would mine
@@ -210,6 +207,40 @@ func loginAlert(code, link string) notify.Message {
 			"Enter code " + code + " at twitch.tv/activate, or open the dashboard.",
 		},
 	}
+}
+
+// outdatedAlert says Twitch stopped accepting requests the miner relies on.
+func outdatedAlert(ops []string) notify.Message {
+	return notify.Message{
+		Title: "TwitchMiner needs an update",
+		URL:   config.ReleasesURL,
+		Lines: []string{
+			"Twitch no longer accepts these requests: " + strings.Join(ops, ", ") + ".",
+			"Mining may not work until TwitchMiner is updated.",
+		},
+	}
+}
+
+// outdatedChanged reports the Twitch requests the miner can no longer make.
+// The dashboard always shows the current list; the console and alerts hear
+// about each request once per run.
+func (m *Miner) outdatedChanged(ops []string) {
+	m.ui.Publish("outdated", ops)
+	m.outdatedMu.Lock()
+	var fresh []string
+	for _, op := range ops {
+		if !m.outdatedAlerted[op] {
+			m.outdatedAlerted[op] = true
+			fresh = append(fresh, op)
+		}
+	}
+	m.outdatedMu.Unlock()
+	if len(fresh) == 0 {
+		return
+	}
+	msg := outdatedAlert(fresh)
+	m.print(msg.Title + ". " + strings.Join(msg.Lines, " "))
+	m.goSafe("update alert", func() { m.sendAlerts(config.AlertUpdateNeeded, msg) })
 }
 
 func (m *Miner) send(ctx context.Context, s config.Settings, msg notify.Message) []error {

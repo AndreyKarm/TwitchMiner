@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -64,9 +65,7 @@ func (m *Miner) fetchInventory(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		for id, c := range discovered {
-			data[id] = c
-		}
+		maps.Copy(data, discovered)
 		if len(discovered) > 0 {
 			slog.Info("found campaigns on live channels", "campaigns", len(discovered))
 		}
@@ -137,8 +136,13 @@ func (m *Miner) fetchInventory(ctx context.Context) error {
 		triggers = triggers[1:]
 	}
 	m.triggers = triggers
+	m.lastInventoryOK = time.Now()
 	m.dirty |= dirtyInventory | dirtyWanted | dirtyGames
+	newIcons := m.learnCampaignIconsLocked()
 	m.mu.Unlock()
+	if newIcons {
+		m.publishGameIcons(true)
+	}
 
 	slog.Info("inventory loaded", "campaigns", len(campaigns))
 	m.restartMaintenance(ctx)
@@ -157,6 +161,7 @@ func (m *Miner) fetchCampaignDetails(ctx context.Context, available []map[string
 	)
 	for batch := range slices.Chunk(available, 20) {
 		wg.Go(func() {
+			defer m.recoverPanic("campaign details")
 			ops := make([]any, len(batch))
 			for i, c := range batch {
 				ops[i] = config.OpCampaignDetails.With(map[string]any{"channelLogin": uid, "dropID": c["id"]})
@@ -250,9 +255,9 @@ func (m *Miner) claimDrop(ctx context.Context, d *Drop) bool {
 		claimedN, total := c.claimedCount()
 		m.print(fmt.Sprintf("Claimed drop: %s %s (%d/%d)", c.Game.Name, d.rewardsText(), claimedN, total))
 		claimed, completed := m.claimAlertsLocked(d)
-		go m.sendAlerts(config.AlertDropClaimed, claimed)
+		m.goSafe("claim alert", func() { m.sendAlerts(config.AlertDropClaimed, claimed) })
 		if completed != nil {
-			go m.sendAlerts(config.AlertCampaignCompleted, *completed)
+			m.goSafe("campaign alert", func() { m.sendAlerts(config.AlertCampaignCompleted, *completed) })
 		}
 		// A claim can leave only unwanted rewards behind; let fallback games
 		// take over promptly.
@@ -272,11 +277,10 @@ func (m *Miner) updateDropMinutesLocked(d *Drop, minutes int) {
 	case d.RealMinutes+delta > d.RequiredMinutes:
 		delta = d.RequiredMinutes - d.RealMinutes
 	}
-	if delta != 0 {
-		for _, cd := range d.Campaign.Drops {
-			if cd.updateRealMinutes(delta) {
-				m.dirty |= dirtyInventory
-			}
+	// A zero delta still matters: it replaces local estimates with Twitch's figure.
+	for _, cd := range d.Campaign.Drops {
+		if cd.updateRealMinutes(delta) {
+			m.dirty |= dirtyInventory
 		}
 	}
 	m.claimReadyLocked(d.Campaign)
@@ -337,7 +341,7 @@ func (m *Miner) readyToClaimLocked(c *Campaign, userID string, now time.Time) []
 func (m *Miner) claimReadyLocked(c *Campaign) {
 	ctx := m.sctx
 	for _, d := range m.readyToClaimLocked(c, m.auth.UserID(), time.Now()) {
-		go m.claimDrop(ctx, d)
+		m.goSafe("claiming a drop", func() { m.claimDrop(ctx, d) })
 	}
 }
 
@@ -369,23 +373,33 @@ func (m *Miner) restartMaintenance(ctx context.Context) {
 	}
 	mctx, cancel := context.WithCancel(ctx)
 	m.mntCancel = cancel
-	interval := m.reloadIntervalLocked()
+	nextPeriod := time.Now().Add(m.reloadIntervalLocked())
+	m.publishScheduleLocked(nextPeriod)
 	m.mu.Unlock()
-	go m.maintenance(mctx, interval)
+	m.goSafe("maintenance", func() { m.maintenance(mctx, nextPeriod) })
 }
 
-// idleDiscoveryInterval is how often to look for new campaigns while a
-// listed game has nothing to mine and Twitch hides the campaign list. Live
-// channels only report campaigns that have started, so this is how soon a
-// new campaign is picked up.
-const idleDiscoveryInterval = 10 * time.Minute
-
+// reloadIntervalLocked is the time until the next inventory reload. While a
+// listed game has nothing to mine and Twitch hides the campaign list, the
+// campaign check interval applies instead: live channels only report
+// campaigns that have started, so it's how soon a new one is picked up.
 func (m *Miner) reloadIntervalLocked() time.Duration {
 	interval := time.Duration(m.policy.refreshMinutes) * time.Minute
 	if m.catalogHidden && m.listedGameIdleLocked() {
-		interval = min(interval, idleDiscoveryInterval)
+		interval = min(interval, time.Duration(max(m.policy.checkMinutes, 1))*time.Minute)
 	}
 	return interval
+}
+
+// CheckSchedule tells the dashboard when campaigns were last loaded and
+// when the next reload is due.
+type CheckSchedule struct {
+	Last time.Time `json:"last,omitzero"`
+	Next time.Time `json:"next,omitzero"`
+}
+
+func (m *Miner) publishScheduleLocked(next time.Time) {
+	m.ui.Publish("checks", CheckSchedule{Last: m.lastInventoryOK, Next: next})
 }
 
 // listedGameIdleLocked reports whether a listed game has nothing to mine.
@@ -399,8 +413,7 @@ func (m *Miner) listedGameIdleLocked() bool {
 	return mining < len(m.policy.games)
 }
 
-func (m *Miner) maintenance(ctx context.Context, interval time.Duration) {
-	nextPeriod := time.Now().Add(interval)
+func (m *Miner) maintenance(ctx context.Context, nextPeriod time.Time) {
 	for time.Now().Before(nextPeriod) {
 		m.mu.Lock()
 		next := nextPeriod
