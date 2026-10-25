@@ -34,15 +34,18 @@
 	</header>
 
 	<main class="shell">
-		<div class="statusbar">
-			<span class="status" id="status">Starting...</span>
-			<button class="btn-ghost small-btn" id="pause" type="button" hidden>Pause</button>
-			<button class="btn-ghost small-btn" id="check-now" type="button" hidden>Check for campaigns</button>
-			<span class="muted small" id="checks" hidden></span>
+		<div class="statusbar" id="statusbar" data-mode="starting">
+			<span class="mode-badge" id="mode-badge"><span class="dot" aria-hidden="true"></span><span id="mode-label">Starting</span></span>
+			<span class="status" id="status" role="status">Starting...</span>
 			<span class="pill pill-manual" id="manual" hidden>
 				<span id="manual-text"></span>
 				<button class="link-button" id="manual-exit" type="button">Back to auto</button>
 			</span>
+			<div class="statusbar-actions">
+				<span class="checks" id="checks" hidden></span>
+				<button class="btn-ghost small-btn" id="check-now" type="button" hidden>Check for campaigns</button>
+				<button class="btn-ghost small-btn" id="pause" type="button" hidden>Pause</button>
+			</div>
 		</div>
 
 		<div class="banner" id="outdated" role="alert" hidden></div>

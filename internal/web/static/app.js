@@ -67,6 +67,19 @@ function relative(iso) {
 	return diff >= 0 ? `in ${fmtSpan(diff)}` : `${fmtSpan(diff)} ago`;
 }
 
+// emptyState explains an empty panel: what's missing, why, and optionally a
+// button that fixes it.
+function emptyState(title, text, action) {
+	return h('div', { class: 'empty' },
+		h('p', { class: 'empty-title' }, title),
+		text ? h('p', { class: 'empty-text' }, text) : null,
+		action ? h('button', { type: 'button', class: 'btn-ghost small-btn', onclick: action.run }, action.label) : null,
+	);
+}
+
+const openGames = { label: 'Add games', run: () => showTab('games') };
+const noGamesListed = () => state.settings && !state.settings.games_to_watch.length;
+
 function toast(message, isError = false) {
 	const el = h('div', { class: isError ? 'toast error' : 'toast', role: isError ? 'alert' : 'status' }, message);
 	$('#toasts').append(el);
@@ -159,8 +172,21 @@ function renderVisibility() {
 
 // ---------- status bar ----------
 
+const MODE_LABELS = { starting: 'Starting', login: 'Login needed', paused: 'Paused', mining: 'Mining', idle: 'Idle' };
+
+// renderStatus shows what the miner is doing as a coloured badge, plus the
+// status text when it adds something to the badge.
 function renderStatus() {
-	$('#status').textContent = state.status;
+	let mode = 'idle';
+	if (state.login?.state === 'code') mode = 'login';
+	else if (!loggedIn()) mode = 'starting';
+	else if (state.paused) mode = 'paused';
+	else if (state.progress?.channel) mode = 'mining';
+	const label = MODE_LABELS[mode];
+	$('#statusbar').dataset.mode = mode;
+	$('#mode-label').textContent = label;
+	const text = state.status || '';
+	$('#status').textContent = text.replace(/\.+$/, '').toLowerCase() === label.toLowerCase() ? '' : text;
 }
 
 function renderManual() {
@@ -242,7 +268,13 @@ function renderProgress() {
 	const root = $('#progress');
 	const p = state.progress;
 	if (!p) {
-		root.replaceChildren(h('p', { class: 'empty' }, 'Nothing is being mined right now.'));
+		if (state.paused) {
+			root.replaceChildren(emptyState('Mining is paused', 'Resume mining to pick a channel again. Finished drops are still claimed.'));
+		} else if (noGamesListed()) {
+			root.replaceChildren(emptyState('Nothing to mine yet', 'Add the games you want drops for, and TwitchMiner finds a channel to watch.', openGames));
+		} else {
+			root.replaceChildren(emptyState('Nothing is being mined right now', 'None of your games has a campaign you can earn. TwitchMiner keeps checking for new ones.'));
+		}
 		return;
 	}
 	const pct = Math.round(p.progress * 100);
@@ -281,10 +313,9 @@ function renderWanted() {
 	const list = state.wanted || [];
 	$('#wanted-count').textContent = list.length ? `${list.length} game${list.length === 1 ? '' : 's'}` : '';
 	if (!list.length) {
-		const hint = state.settings && !state.settings.games_to_watch.length && state.settings.priority_list_only
-			? 'Add games in the Games tab to start mining.'
-			: 'No campaign has rewards left to mine.';
-		root.replaceChildren(h('p', { class: 'empty' }, hint));
+		root.replaceChildren(noGamesListed() && state.settings.priority_list_only
+			? emptyState('Your watch list is empty', 'Games you add are mined in this order.', openGames)
+			: emptyState('The queue is empty', 'No campaign for your games has rewards left to mine.'));
 		return;
 	}
 	const current = state.progress?.game_name;
@@ -334,7 +365,7 @@ function renderChannels() {
 	const online = list.filter((c) => c.online).length;
 	$('#channels-count').textContent = list.length ? `${online} live of ${list.length}` : '';
 	if (!list.length) {
-		root.replaceChildren(h('p', { class: 'empty' }, 'No channels tracked yet.'));
+		root.replaceChildren(emptyState('No channels yet', 'Live channels appear here once a game on your list has a campaign to mine.'));
 		return;
 	}
 	const groups = new Map();
@@ -430,7 +461,9 @@ function renderInventory() {
 
 	const root = $('#inventory');
 	if (!list.length) {
-		root.replaceChildren(h('p', { class: 'empty' }, state.inventory.length ? 'No campaigns match these filters.' : 'The inventory is still loading.'));
+		root.replaceChildren(state.inventory.length
+			? emptyState('No campaigns match these filters', 'Try All, or clear the search.')
+			: emptyState('No campaigns yet', 'Campaigns you take part in, and ones found for your games, appear here.'));
 		return;
 	}
 	root.replaceChildren(...list.map(campaignCard));
@@ -685,6 +718,8 @@ function renderPaused() {
 	btn.classList.toggle('btn-paused', !!state.paused);
 	$('#check-now').hidden = !loggedIn();
 	renderChecks();
+	renderStatus();
+	renderProgress();
 }
 
 $('#pause').addEventListener('click', () =>
@@ -1190,10 +1225,10 @@ comboInput.addEventListener('keydown', (e) => {
 const renderers = {
 	status: renderStatus,
 	login: renderLogin,
-	settings: () => { renderSettings(); renderGamesTab(); renderWanted(); },
+	settings: () => { renderSettings(); renderGamesTab(); renderWanted(); renderProgress(); },
 	channels: renderChannels,
 	inventory: () => { renderInventory(); renderGamesTab(); },
-	progress: () => { renderProgress(); renderWanted(); },
+	progress: () => { renderProgress(); renderWanted(); renderStatus(); },
 	wanted: renderWanted,
 	manual: renderManual,
 	games: renderGamesTab,

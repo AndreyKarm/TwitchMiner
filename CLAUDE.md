@@ -66,4 +66,11 @@ fixes) when Twitch behaviour is in doubt.
   (`internal/miner/*_test.go`). Timing and endpoints that tests shorten are
   package variables (`lockLeakWait`, `exitProcess`, `listenRetry`, `pubsubURL`).
 - The frontend has no framework or build step. Colours come from the tokens in
-  `static/app.css`; check layouts at desktop width and at 375 px.
+  `static/app.css` and the top of `static/dashboard.css`; check layouts at
+  desktop width and at 375 px.
+- The design is square: never add `border-radius`. Structure uses the neutral
+  greys (`--surface*`, `--border*`); pink is only for things you can act on and
+  for what's active, shown as a bar (tab underline, left edge of a row) rather
+  than a pink box. Text on pink uses `--on-primary`, because white on this pink
+  is too faint to read. `app.css` is the user's shared base style; override it
+  in `dashboard.css` instead of editing it.
