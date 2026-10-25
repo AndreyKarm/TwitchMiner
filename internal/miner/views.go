@@ -24,6 +24,10 @@ type ChannelView struct {
 	ACLBased     bool   `json:"acl_based"`
 	Watching     bool   `json:"watching"`
 	Watchable    bool   `json:"watchable"`
+	// Banned is set while the viewer is banned or timed out in the channel's
+	// chat; BannedUntil is when a timeout ends.
+	Banned      bool      `json:"banned"`
+	BannedUntil time.Time `json:"banned_until,omitzero"`
 }
 
 type BenefitView struct {
@@ -48,29 +52,37 @@ type DropView struct {
 	Benefits        []BenefitView `json:"benefits"`
 	StartsAt        time.Time     `json:"starts_at"`
 	EndsAt          time.Time     `json:"ends_at"`
+	// WontFinish marks an unclaimed drop that needs more watching
+	// (NeededMinutes, prerequisites included) than the MinutesLeft before
+	// it ends.
+	WontFinish    bool `json:"wont_finish"`
+	NeededMinutes int  `json:"needed_minutes,omitempty"`
+	MinutesLeft   int  `json:"minutes_left,omitempty"`
 }
 
 type CampaignView struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	GameID         string     `json:"game_id"`
-	GameName       string     `json:"game_name"`
-	GameIcon       string     `json:"game_icon"`
-	URL            string     `json:"url"`
-	LinkURL        string     `json:"link_url"`
-	Linked         bool       `json:"linked"`
-	Discovered     bool       `json:"discovered"`
-	Eligible       bool       `json:"eligible"`
-	StartsAt       time.Time  `json:"starts_at"`
-	EndsAt         time.Time  `json:"ends_at"`
-	Active         bool       `json:"active"`
-	Upcoming       bool       `json:"upcoming"`
-	Expired        bool       `json:"expired"`
-	ClaimedDrops   int        `json:"claimed_drops"`
-	TotalDrops     int        `json:"total_drops"`
-	Finished       bool       `json:"finished"`
-	MiningFinished bool       `json:"mining_finished"`
-	Drops          []DropView `json:"drops"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	GameID         string    `json:"game_id"`
+	GameName       string    `json:"game_name"`
+	GameIcon       string    `json:"game_icon"`
+	URL            string    `json:"url"`
+	LinkURL        string    `json:"link_url"`
+	Linked         bool      `json:"linked"`
+	Discovered     bool      `json:"discovered"`
+	Eligible       bool      `json:"eligible"`
+	StartsAt       time.Time `json:"starts_at"`
+	EndsAt         time.Time `json:"ends_at"`
+	Active         bool      `json:"active"`
+	Upcoming       bool      `json:"upcoming"`
+	Expired        bool      `json:"expired"`
+	ClaimedDrops   int       `json:"claimed_drops"`
+	TotalDrops     int       `json:"total_drops"`
+	Finished       bool      `json:"finished"`
+	MiningFinished bool      `json:"mining_finished"`
+	// RemainingMinutes is how much watching the mineable drops still need.
+	RemainingMinutes int        `json:"remaining_minutes"`
+	Drops            []DropView `json:"drops"`
 }
 
 type ProgressView struct {
@@ -88,9 +100,13 @@ type ProgressView struct {
 	Progress         float64 `json:"progress"`
 	RemainingMinutes int     `json:"remaining_minutes"`
 	CampaignProgress float64 `json:"campaign_progress"`
-	UpdatedAt        int64   `json:"updated_at"`
-	Channel          string  `json:"channel,omitempty"`
-	ChannelLogin     string  `json:"channel_login,omitempty"`
+	// CampaignRemainingMinutes is the watching left for the whole campaign.
+	CampaignRemainingMinutes int    `json:"campaign_remaining_minutes"`
+	WontFinish               bool   `json:"wont_finish"`
+	MinutesLeft              int    `json:"minutes_left,omitempty"`
+	UpdatedAt                int64  `json:"updated_at"`
+	Channel                  string `json:"channel,omitempty"`
+	ChannelLogin             string `json:"channel_login,omitempty"`
 }
 
 type ManualView struct {
@@ -156,6 +172,7 @@ func (m *Miner) uiLoop(ctx context.Context) {
 
 func (m *Miner) channelViewsLocked() []ChannelView {
 	out := []ChannelView{}
+	now := time.Now()
 	for _, ch := range m.orderedChannelsLocked() {
 		v := ChannelView{
 			ID:           ch.ID,
@@ -169,6 +186,10 @@ func (m *Miner) channelViewsLocked() []ChannelView {
 			ACLBased:     ch.ACLBased,
 			Watching:     m.watching != nil && m.watching.ID == ch.ID,
 			Watchable:    m.canWatchLocked(ch),
+			Banned:       ch.Banned(now),
+		}
+		if v.Banned && !ch.bannedUntil.Equal(banForever) {
+			v.BannedUntil = ch.bannedUntil
 		}
 		if g := ch.Game(); g != nil {
 			v.Game, v.GameID, v.GameIcon = g.Name, g.ID, g.BoxArtURL
@@ -180,6 +201,7 @@ func (m *Miner) channelViewsLocked() []ChannelView {
 
 func (m *Miner) campaignViewsLocked() []CampaignView {
 	out := []CampaignView{}
+	now := time.Now()
 	for _, c := range m.inventory {
 		v := CampaignView{
 			ID:         c.ID,
@@ -200,8 +222,13 @@ func (m *Miner) campaignViewsLocked() []CampaignView {
 			Drops:      []DropView{},
 		}
 		mineable := false
+		late := c.lateDrops(now)
 		for _, d := range c.watchDrops() {
 			dv := dropView(d)
+			if late[d.ID] {
+				dv.WontFinish = true
+				dv.NeededMinutes, dv.MinutesLeft = d.TotalRemainingMinutes(), max(d.minutesLeft(now), 0)
+			}
 			v.Drops = append(v.Drops, dv)
 			if dv.IsMineable {
 				mineable = true
@@ -213,6 +240,9 @@ func (m *Miner) campaignViewsLocked() []CampaignView {
 		v.ClaimedDrops, v.TotalDrops = c.claimedCount()
 		v.Finished = v.ClaimedDrops == v.TotalDrops
 		v.MiningFinished = !mineable
+		if !v.Expired {
+			v.RemainingMinutes = c.RemainingMinutes()
+		}
 		out = append(out, v)
 	}
 	return out
@@ -269,6 +299,11 @@ func (m *Miner) progressViewLocked() *ProgressView {
 	}
 	if claimed, total := c.claimedCount(); total > 0 {
 		v.CampaignProgress = float64(claimed) / float64(total)
+	}
+	now := time.Now()
+	v.CampaignRemainingMinutes = max(c.RemainingMinutes(), v.RemainingMinutes)
+	if c.lateDrops(now)[d.ID] {
+		v.WontFinish, v.MinutesLeft = true, max(d.minutesLeft(now), 0)
 	}
 	if m.watching != nil {
 		v.Channel, v.ChannelLogin = m.watching.Name(), m.watching.Login

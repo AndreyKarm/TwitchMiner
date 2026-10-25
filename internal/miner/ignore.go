@@ -2,10 +2,12 @@ package miner
 
 import "strings"
 
-// IgnoreReason explains why a drop is skipped by the drop-name blacklist.
+// IgnoreReason explains why a drop is skipped by the drop-name blacklist or
+// because it can't be finished in time.
 type IgnoreReason struct {
-	// Kind is "keyword" when the name matched, or "precondition" when a
-	// required earlier drop is ignored.
+	// Kind is "keyword" when the name matched, "too_late" when the drop
+	// can't be finished before it ends, or "precondition" when a required
+	// earlier drop is ignored.
 	Kind   string
 	Detail string
 }
@@ -16,11 +18,11 @@ type Evaluation struct {
 	Mineable map[string]bool
 }
 
-// evaluateIgnorePolicy marks drops matching a keyword as ignored, along with
-// every drop that depends on them, and computes which unclaimed drops still
-// lead to a reward worth mining. Prerequisites shared with an allowed
-// reward stay mineable.
-func evaluateIgnorePolicy(keywords []string, drops []*Drop) *Evaluation {
+// evaluateIgnorePolicy marks drops matching a keyword or listed in late as
+// ignored, along with every drop that depends on them, and computes which
+// unclaimed drops still lead to a reward worth mining. Prerequisites shared
+// with an allowed reward stay mineable.
+func evaluateIgnorePolicy(keywords []string, drops []*Drop, late map[string]bool) *Evaluation {
 	byID := make(map[string]*Drop, len(drops))
 	for _, d := range drops {
 		byID[d.ID] = d
@@ -36,6 +38,9 @@ func evaluateIgnorePolicy(keywords []string, drops []*Drop) *Evaluation {
 				reasons[d.ID] = &IgnoreReason{Kind: "keyword", Detail: k}
 				break
 			}
+		}
+		if reasons[d.ID] == nil && late[d.ID] {
+			reasons[d.ID] = &IgnoreReason{Kind: "too_late"}
 		}
 	}
 

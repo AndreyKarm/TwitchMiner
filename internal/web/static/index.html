@@ -181,6 +181,14 @@
 							<p class="hint">One word or phrase per line. Matching drops, and drops that depend on them, are skipped.</p>
 							<textarea id="blacklist" rows="3" spellcheck="false" placeholder="e.g. Skin"></textarea>
 							<div class="row-end"><button type="button" id="blacklist-save">Save</button></div>
+							<label class="toggle">
+								<input type="checkbox" id="skip-late">
+								<span class="toggle-track"></span>
+								<span class="toggle-label">
+									Skip drops that can't finish in time
+									<small>A drop that needs more watching than the time left before it ends is skipped. When off, it's still mined and marked "won't finish".</small>
+								</span>
+							</label>
 						</div>
 					</article>
 

@@ -150,6 +150,16 @@ func ChannelCampaigns(channelID string) RawQuery {
 	}
 }
 
+// BanStatuses reports, for each channel, whether the viewer is banned or
+// timed out in its chat. banStatus is null when they aren't, and expiresAt
+// is null for a permanent ban. Unknown IDs come back as null users.
+func BanStatuses(channelIDs []string) RawQuery {
+	return RawQuery{
+		Query:     `query($ids: [ID!]) { users(ids: $ids) { id self { banStatus { isPermanent expiresAt } } } }`,
+		Variables: map[string]any{"ids": channelIDs},
+	}
+}
+
 // SearchGames finds Twitch categories by name. The web client's persisted
 // search query isn't accepted from the TV client, so it's sent as text.
 func SearchGames(query string, limit int) RawQuery {

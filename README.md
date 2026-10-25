@@ -97,7 +97,10 @@ offered by its channels, so it won't be found again.
 ## Use it
 
 - **Dashboard** shows the drop being mined, the mining queue, the console, and the
-  tracked channels. Click a channel to watch it. Picking a channel of another game
+  tracked channels. The drop card says when the drop and its campaign should be
+  done, and the queue shows how much watching each game has left and roughly
+  when it finishes if the games above it go first. These assume the channel stays
+  live. Click a channel to watch it. Picking a channel of another game
   switches to manual mode until you go back to auto. **Pause** stops watching until
   you resume. Drops Twitch reports as ready are still claimed while paused. **Check
   for campaigns** reloads the inventory now; next to it you can see when campaigns
@@ -116,6 +119,10 @@ offered by its channels, so it won't be found again.
 - **Settings** chooses which reward types count, ignores drops by name, sets how
   often to reload the inventory and look for new campaigns, sets campaign alerts, and
   sets a proxy.
+  - A drop that needs more watching than the time left before it ends is marked
+    **won't finish** in the queue and Inventory, and the console says so once.
+    Turn on **Skip drops that can't finish in time** to skip such drops and mine
+    something that can still finish instead.
 
 TwitchMiner looks after itself while it runs:
 
@@ -123,6 +130,10 @@ TwitchMiner looks after itself while it runs:
   campaigns right away, instead of waiting for its next scheduled check.
 - If a stream ends without Twitch saying so, it notices within about 30 seconds and
   switches channel.
+- Channels that banned or timed out your account can't earn drops, so they're
+  skipped and tagged in the channel list. Bans are checked when channels are
+  loaded, and again for the watched channel when Twitch stops counting progress
+  there. A timed-out channel is used again once the timeout ends.
 - An unexpected internal error is logged and recovered from, instead of closing the
   app. If mining itself hit the error, mining restarts after 30 seconds.
 - When Twitch changes something TwitchMiner relies on, the dashboard shows a "needs
@@ -232,5 +243,4 @@ The [release workflow](.github/workflows/release.yml) then:
 
 These Python features aren't in the Go version yet: claimed-drop history and CSV
 export, desktop notifications (claims are alerted through Telegram or Discord),
-mining hours, a dashboard password, channel ban detection, diagnostics dumps, and
-translations.
+mining hours, a dashboard password, diagnostics dumps, and translations.

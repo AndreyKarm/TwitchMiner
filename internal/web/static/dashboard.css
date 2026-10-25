@@ -864,6 +864,16 @@ input[type="checkbox"] {
   font-variant-numeric: tabular-nums;
 }
 
+.progress-eta {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.progress-eta.warn {
+  color: var(--warn);
+}
+
 /* ---------- mining queue ---------- */
 
 .queue {
@@ -926,6 +936,21 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
 }
 
+.queue-eta {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.queue-eta .muted {
+  font-weight: 500;
+}
+
 /* Tags are small square labels: neutral by default, coloured by meaning. */
 .tag {
   display: inline-block;
@@ -953,6 +978,11 @@ input[type="checkbox"] {
 .tag-red {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: color-mix(in srgb, var(--danger) 80%, white);
+}
+
+.tag-warn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
 }
 
 a.tag {
@@ -1084,6 +1114,10 @@ a.tag-red:hover {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-pick .tag {
   white-space: nowrap;
 }
 
@@ -1304,6 +1338,10 @@ a.campaign-title:hover {
 .drop-state.claimed {
   color: var(--success);
   font-weight: 700;
+}
+
+.drop-state.warn {
+  color: var(--warn);
 }
 
 /* ---------- settings ---------- */
@@ -1956,6 +1994,15 @@ a.campaign-title:hover {
 
   .progress-stats {
     flex-wrap: wrap;
+  }
+
+  /* Leave the queue's names room: keep the watching left, drop the clock. */
+  .queue-eta .muted {
+    display: none;
+  }
+
+  .queue-name .tag {
+    white-space: nowrap;
   }
 
   .campaign-grid {

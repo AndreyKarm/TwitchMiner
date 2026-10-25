@@ -62,6 +62,19 @@ function fmtSpan(ms) {
 	return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
 
+const fmtMinutes = (mins) => fmtSpan(mins * 60000);
+
+// fmtAt names a coming moment: the time if it's today, with the weekday
+// within a week, otherwise with the date.
+function fmtAt(ms) {
+	const d = new Date(ms);
+	const now = new Date();
+	const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	if (d.toDateString() === now.toDateString()) return time;
+	if (ms - now.getTime() < 6 * 86400000) return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+	return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
 function relative(iso) {
 	const diff = new Date(iso).getTime() - Date.now();
 	return diff >= 0 ? `in ${fmtSpan(diff)}` : `${fmtSpan(diff)} ago`;
@@ -280,6 +293,13 @@ function renderProgress() {
 	const pct = Math.round(p.progress * 100);
 	const bg = art(p.benefit_image, 72, 72) || art(p.game_icon, 72, 96);
 	const campaignURL = safeURL(p.campaign_url);
+	// Finish times assume the channel stays live and keeps counting.
+	const dropLeft = progressRemaining(p);
+	const campaignLeft = Math.max(p.campaign_remaining_minutes * 60 - (p.remaining_minutes * 60 - dropLeft), dropLeft);
+	const eta = [`Drop done around ${fmtAt(Date.now() + dropLeft * 1000)}`];
+	if (campaignLeft - dropLeft >= 60) {
+		eta.push(`campaign around ${fmtAt(Date.now() + campaignLeft * 1000)} (${fmtMinutes(campaignLeft / 60)} left)`);
+	}
 	root.replaceChildren(
 		h('div', { class: 'progress-card' },
 			h('span', { class: 'progress-art', style: bg ? { backgroundImage: bg } : null, 'aria-hidden': 'true' }),
@@ -294,8 +314,12 @@ function renderProgress() {
 					h('span', { class: 'bar-fill', style: { width: `${pct}%` } })),
 				h('div', { class: 'progress-stats' },
 					h('span', null, h('strong', null, `${p.current_minutes} / ${p.required_minutes}`), ' minutes'),
-					h('span', null, h('strong', { class: 'countdown', id: 'countdown' }, fmtClock(progressRemaining(p))), ' left'),
+					h('span', null, h('strong', { class: 'countdown', id: 'countdown' }, fmtClock(dropLeft)), ' left'),
 				),
+				h('p', { class: 'progress-eta', title: 'If the channel stays live and Twitch keeps counting' }, eta.join(' · ')),
+				p.wont_finish
+					? h('p', { class: 'progress-eta warn' }, `Won't finish in time: it needs ${fmtMinutes(p.remaining_minutes)} more, but ends in ${fmtMinutes(p.minutes_left)}.`)
+					: null,
 			),
 		),
 	);
@@ -311,7 +335,10 @@ function tickProgress() {
 function renderWanted() {
 	const root = $('#wanted');
 	const list = state.wanted || [];
-	$('#wanted-count').textContent = list.length ? `${list.length} game${list.length === 1 ? '' : 's'}` : '';
+	const total = list.reduce((sum, g) => sum + g.remaining_minutes, 0);
+	$('#wanted-count').textContent = list.length
+		? `${list.length} game${list.length === 1 ? '' : 's'}${total ? ` · ${fmtMinutes(total)} to watch` : ''}`
+		: '';
 	if (!list.length) {
 		root.replaceChildren(noGamesListed() && state.settings.priority_list_only
 			? emptyState('Your watch list is empty', 'Games you add are mined in this order.', openGames)
@@ -319,20 +346,35 @@ function renderWanted() {
 		return;
 	}
 	const current = state.progress?.game_name;
+	// Each game's finish time assumes the ones before it are mined first,
+	// without breaks.
+	let done = Date.now();
 	root.replaceChildren(
 		h('ol', { class: 'queue' },
 			list.map((g, i) => {
-				const drops = g.campaigns.flatMap((c) => c.drops.map((d) => d.benefits.join(', ') || d.name));
+				const all = g.campaigns.flatMap((c) => c.drops);
+				const drops = all.map((d) => d.benefits.join(', ') || d.name);
 				const shown = drops.slice(0, 3).join(' · ') + (drops.length > 3 ? ` · +${drops.length - 3} more` : '');
+				const late = all.filter((d) => d.wont_finish).map((d) => d.benefits.join(', ') || d.name);
+				done += g.remaining_minutes * 60000;
 				return h('li', { class: g.game_name === current ? 'queue-item current' : 'queue-item' },
 					h('span', { class: 'queue-rank' }, i + 1),
 					thumb(g.game_icon),
 					h('div', { class: 'queue-body' },
 						h('div', { class: 'queue-name' }, g.game_name, ' ',
 							g.game_name === current ? h('span', { class: 'tag tag-pink' }, 'mining') : null, ' ',
-							g.fallback ? h('span', { class: 'tag' }, 'fallback') : null),
+							g.fallback ? h('span', { class: 'tag' }, 'fallback') : null, ' ',
+							late.length
+								? h('span', { class: 'tag tag-warn', title: `Needs more watching than the time left:\n${late.join('\n')}` },
+									late.length === 1 ? 'won\'t finish' : `${late.length} won't finish`)
+								: null),
 						h('div', { class: 'queue-meta', title: drops.join('\n') }, shown),
 					),
+					g.remaining_minutes
+						? h('div', { class: 'queue-eta', title: 'Watching left, and when it\'s done if the games above are mined first without breaks' },
+							h('span', null, fmtMinutes(g.remaining_minutes)),
+							h('span', { class: 'muted' }, `~${fmtAt(done)}`))
+						: null,
 				);
 			}),
 		),
@@ -400,29 +442,42 @@ function channelRow(c) {
 	const cls = ['channel'];
 	if (c.watching) cls.push('watching');
 	if (c.watchable) cls.push('watchable');
-	if (!c.online) cls.push('offline');
+	if (!c.online || c.banned) cls.push('offline');
 	let meta;
 	if (c.watching) meta = h('span', { class: 'channel-meta live' }, 'Watching');
 	else if (c.online) meta = h('span', { class: 'channel-meta' }, `${fmtNumber(c.viewers)} viewers`);
 	else meta = h('span', { class: 'channel-meta' }, c.pending ? 'Checking...' : 'Offline');
+	let title = c.watchable ? `Watch ${c.name}` : 'This channel can\'t progress a wanted drop right now';
+	if (c.banned) title = banText(c);
 	return h('div', { class: cls.join(' ') },
 		h('button', {
 			class: 'channel-pick',
 			type: 'button',
-			title: c.watchable ? `Watch ${c.name}` : 'This channel can\'t progress a wanted drop right now',
+			title,
 			onclick: () => pickChannel(c),
 		},
 			h('span', { class: 'channel-name' }, c.name),
+			c.banned ? h('span', { class: 'tag tag-red' }, c.banned_until ? 'timed out' : 'banned') : null,
 			c.acl_based ? h('span', { class: 'tag tag-pink', title: 'Listed by the campaign' }, 'campaign') : null,
-			c.online && c.drops_enabled ? h('span', { class: 'tag tag-green' }, 'drops') : null,
+			c.online && c.drops_enabled && !c.banned ? h('span', { class: 'tag tag-green' }, 'drops') : null,
 			meta,
 		),
 		h('a', { class: 'channel-open', href: safeURL(c.url), target: '_blank', rel: 'noopener noreferrer', title: `Open ${c.name} on Twitch`, 'aria-label': `Open ${c.name} on Twitch` }, '↗'),
 	);
 }
 
+function banText(c) {
+	return c.banned_until
+		? `You're timed out in ${c.name}'s chat until ${fmtAt(new Date(c.banned_until).getTime())}, so it can't earn drops until then.`
+		: `You're banned from ${c.name}'s chat, so it can't earn drops.`;
+}
+
 async function pickChannel(c) {
 	if (c.watching) return;
+	if (c.banned) {
+		toast(banText(c));
+		return;
+	}
 	if (!c.watchable) {
 		toast(`${c.name} can't progress any wanted drop right now.`);
 		return;
@@ -489,7 +544,8 @@ function campaignCard(c) {
 			thumb(c.game_icon, 'thumb', 48, 64),
 			h('div', null,
 				url ? h('a', { class: 'campaign-title', href: url, target: '_blank', rel: 'noopener noreferrer' }, c.name) : h('span', { class: 'campaign-title' }, c.name),
-				h('div', { class: 'campaign-game' }, c.game_name),
+				h('div', { class: 'campaign-game' }, c.game_name,
+					c.remaining_minutes ? ` · ${fmtMinutes(c.remaining_minutes)} of watching left` : ''),
 				h('div', { class: 'campaign-tags' }, tags),
 			),
 		),
@@ -506,13 +562,22 @@ function dropRow(d) {
 	const bg = img ? art(img.image_url, 40, 40) : null;
 	let stateText;
 	let stateCls = 'drop-state';
+	const lateText = d.wont_finish
+		? `Needs ${fmtMinutes(d.needed_minutes)} more watching, but ends in ${fmtMinutes(d.minutes_left)}.`
+		: null;
 	if (d.is_claimed) {
 		stateText = 'Claimed ✓';
 		stateCls += ' claimed';
+	} else if (d.is_ignored && d.ignored_reason === 'too_late') {
+		stateText = 'Skipped: can\'t finish in time';
+		stateCls += ' warn';
 	} else if (d.is_ignored) {
 		stateText = d.ignored_reason === 'keyword' ? `Ignored (“${d.ignored_detail}”)` : 'Ignored (needs an ignored drop)';
 	} else if (d.is_skipped) {
 		stateText = 'Skipped';
+	} else if (d.wont_finish) {
+		stateText = `${d.current_minutes}/${d.required_minutes} min · won't finish`;
+		stateCls += ' warn';
 	} else {
 		stateText = `${d.current_minutes}/${d.required_minutes} min`;
 	}
@@ -522,7 +587,7 @@ function dropRow(d) {
 		h('div', { class: 'drop-body' },
 			h('div', { class: 'drop-line' },
 				h('span', { class: 'drop-name', title: `${d.name}\n${names}` }, names),
-				h('span', { class: stateCls }, stateText)),
+				h('span', { class: stateCls, title: lateText }, stateText)),
 			h('div', { class: d.is_claimed ? 'bar thin done' : 'bar thin' },
 				h('span', { class: 'bar-fill', style: { width: `${Math.round(d.progress * 100)}%` } })),
 		),
@@ -585,6 +650,7 @@ function renderSettings(force = false) {
 	if (!s) return;
 
 	$('#allow-unlinked').checked = s.allow_unlinked_campaigns;
+	$('#skip-late').checked = s.skip_unfinishable_drops;
 
 	$('#benefits').replaceChildren(
 		...BENEFITS.map(([key, label]) =>
@@ -785,6 +851,7 @@ async function checkNow(e) {
 $('#check-now').addEventListener('click', checkNow);
 
 $('#allow-unlinked').addEventListener('change', (e) => saveSettings({ allow_unlinked_campaigns: e.target.checked }));
+$('#skip-late').addEventListener('change', (e) => saveSettings({ skip_unfinishable_drops: e.target.checked }));
 
 $('#blacklist-save').addEventListener('click', () => {
 	const lines = $('#blacklist').value.split('\n');

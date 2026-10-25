@@ -1,7 +1,9 @@
 package miner
 
 import (
+	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -192,6 +194,23 @@ func (d *Drop) chainRemaining(visiting map[string]bool) int {
 	return d.RemainingMinutes() + best
 }
 
+// minutesLeft is how many minutes of the drop's watch window remain, from
+// now or from its start if it hasn't started.
+func (d *Drop) minutesLeft(now time.Time) int {
+	end := d.EndsAt
+	if c := d.Campaign; end.IsZero() || !c.EndsAt.IsZero() && c.EndsAt.Before(end) {
+		end = c.EndsAt
+	}
+	if end.IsZero() {
+		return math.MaxInt
+	}
+	start := now
+	if d.StartsAt.After(now) {
+		start = d.StartsAt
+	}
+	return int(end.Sub(start) / time.Minute)
+}
+
 // Progress is the watched fraction, 0..1.
 func (d *Drop) Progress() float64 {
 	cur := d.CurrentMinutes()
@@ -269,6 +288,19 @@ func (d *Drop) rewardsText() string {
 	return strings.Join(names, ", ")
 }
 
+// label names the drop by its rewards, or by its own name without any.
+func (d *Drop) label() string {
+	if text := d.rewardsText(); text != "" {
+		return text
+	}
+	return d.Name
+}
+
+// wantsBenefit reports whether any reward of the drop is an allowed type.
+func (d *Drop) wantsBenefit(allowed map[string]bool) bool {
+	return slices.ContainsFunc(d.Benefits, func(b Benefit) bool { return allowed[b.Type] })
+}
+
 func (d *Drop) wantedUnclaimedBenefits(allowed map[string]bool) []string {
 	if !d.IsMineable() {
 		return nil
@@ -328,6 +360,8 @@ type Campaign struct {
 
 	evalKey string
 	eval    *Evaluation
+	late    map[string]bool
+	lateAt  time.Time
 }
 
 type aclChannel struct {
@@ -402,22 +436,76 @@ func (c *Campaign) watchDrops() []*Drop {
 }
 
 // evaluation returns the ignore-policy result, cached until the keyword
-// list or any claim state changes.
+// list, any claim state or (when those are skipped) the set of drops that
+// can't finish in time changes.
 func (c *Campaign) evaluation() *Evaluation {
+	var late map[string]bool
+	if c.m.policy.skipLate {
+		late = c.lateCached(time.Now())
+	}
 	var b strings.Builder
 	b.WriteString(c.m.policy.keywordKey)
-	for _, d := range c.Drops {
-		if d.IsClaimed {
+	flag := func(on bool) {
+		if on {
 			b.WriteByte('1')
 		} else {
 			b.WriteByte('0')
 		}
 	}
+	for _, d := range c.Drops {
+		flag(d.IsClaimed)
+	}
+	if late != nil {
+		b.WriteByte('|')
+		for _, d := range c.Drops {
+			flag(late[d.ID])
+		}
+	}
 	if key := b.String(); c.eval == nil || key != c.evalKey {
-		c.eval = evaluateIgnorePolicy(c.m.policy.keywords, c.Drops)
+		c.eval = evaluateIgnorePolicy(c.m.policy.keywords, c.Drops, late)
 		c.evalKey = key
 	}
 	return c.eval
+}
+
+// lateDrops lists the unclaimed watch drops that can't be finished before
+// they end: their remaining minutes, prerequisites included, exceed the
+// time left. Mining earns at most one minute per minute, so this never
+// gets better without real progress from Twitch. Drops that wait on one
+// that can't finish can't finish either. Drops that already ended aren't
+// listed.
+func (c *Campaign) lateDrops(now time.Time) map[string]bool {
+	late := map[string]bool{}
+	for _, d := range c.watchDrops() {
+		if !d.IsClaimed && now.Before(d.EndsAt) && d.TotalRemainingMinutes() > d.minutesLeft(now) {
+			late[d.ID] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, d := range c.watchDrops() {
+			if d.IsClaimed || late[d.ID] || !now.Before(d.EndsAt) {
+				continue
+			}
+			if slices.ContainsFunc(d.Preconditions, func(id string) bool { return late[id] }) {
+				late[d.ID] = true
+				changed = true
+			}
+		}
+	}
+	return late
+}
+
+// lateTTL is how long lateCached reuses a result. Lateness only creeps in
+// as time passes, so a short delay is harmless and saves recomputing it on
+// every eligibility check.
+const lateTTL = 30 * time.Second
+
+func (c *Campaign) lateCached(now time.Time) map[string]bool {
+	if c.late == nil || now.Sub(c.lateAt) >= lateTTL || now.Before(c.lateAt) {
+		c.late, c.lateAt = c.lateDrops(now), now
+	}
+	return c.late
 }
 
 func (c *Campaign) Active() bool {
@@ -571,6 +659,12 @@ type Channel struct {
 	stream    *Stream
 	pendingUp *time.Timer
 
+	// bannedUntil is when the viewer's ban or timeout in this channel's chat
+	// ends (banForever for a permanent ban). A banned viewer earns no drops
+	// there. banChecked is when the ban status was last asked for.
+	bannedUntil time.Time
+	banChecked  time.Time
+
 	// Watch state, used by the watch loop.
 	watchBroadcast    string
 	segments          *segmentCache
@@ -617,6 +711,9 @@ func (ch *Channel) Viewers() int {
 }
 
 func (ch *Channel) DropsEnabled() bool { return ch.stream != nil && ch.stream.DropsEnabled }
+
+// Banned reports whether the viewer is banned or timed out in the channel.
+func (ch *Channel) Banned(now time.Time) bool { return now.Before(ch.bannedUntil) }
 
 func (ch *Channel) cancelPending() {
 	if ch.pendingUp != nil {

@@ -42,6 +42,10 @@ type Settings struct {
 	DropNameBlacklist []string `json:"drop_name_blacklist"`
 	// AllowUnlinkedCampaigns mines campaigns whose game account isn't linked.
 	AllowUnlinkedCampaigns bool `json:"allow_unlinked_campaigns"`
+	// SkipUnfinishableDrops skips drops that need more watching than the
+	// time left before they end. When off they're mined anyway, with a
+	// warning.
+	SkipUnfinishableDrops bool `json:"skip_unfinishable_drops"`
 	// ConnectionQuality (1-6) scales HTTP timeouts for slow connections.
 	ConnectionQuality int `json:"connection_quality"`
 	// RefreshIntervalMinutes is how often the inventory is reloaded.

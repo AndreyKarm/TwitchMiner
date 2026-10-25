@@ -99,6 +99,10 @@ func (m *Miner) watchLoop(ctx context.Context) {
 			}
 		}
 		m.mu.Unlock()
+		// No credit from Twitch can mean the channel banned the viewer.
+		if !handled {
+			m.recheckBan(ctx, ch)
+		}
 	}
 }
 

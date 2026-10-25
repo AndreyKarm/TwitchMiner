@@ -10,6 +10,8 @@ import (
 type WantedDrop struct {
 	Name     string   `json:"name"`
 	Benefits []string `json:"benefits"`
+	// WontFinish marks a drop that needs more watching than the time left.
+	WontFinish bool `json:"wont_finish"`
 }
 
 // WantedCampaign groups wanted drops by campaign.
@@ -18,7 +20,9 @@ type WantedCampaign struct {
 	Name  string       `json:"name"`
 	URL   string       `json:"url"`
 	Drops []WantedDrop `json:"drops"`
-	ends  time.Time
+	// RemainingMinutes is the watching left for the campaign's wanted drops.
+	RemainingMinutes int `json:"remaining_minutes"`
+	ends             time.Time
 }
 
 // WantedGame is one entry of the mining queue, in priority order.
@@ -28,18 +32,23 @@ type WantedGame struct {
 	GameIcon  string           `json:"game_icon"`
 	Fallback  bool             `json:"fallback"`
 	Campaigns []WantedCampaign `json:"campaigns"`
-	game      *Game
+	// RemainingMinutes adds up the campaigns' remaining watching, as if
+	// they're mined one after another. Campaigns Twitch credits together
+	// finish sooner.
+	RemainingMinutes int `json:"remaining_minutes"`
+	game             *Game
 }
 
 func (m *Miner) wantedDropsLocked(c *Campaign, now time.Time) []WantedDrop {
 	var out []WantedDrop
+	late := c.lateDrops(now)
 	for _, d := range c.Drops {
 		// wantedUnclaimedBenefits skips claimed and unmineable drops.
 		if !d.IsWatchDrop() || !d.EndsAt.After(now) {
 			continue
 		}
 		if bens := d.wantedUnclaimedBenefits(m.policy.benefits); len(bens) > 0 {
-			out = append(out, WantedDrop{Name: d.Name, Benefits: bens})
+			out = append(out, WantedDrop{Name: d.Name, Benefits: bens, WontFinish: late[d.ID]})
 		}
 	}
 	return out
@@ -56,7 +65,14 @@ func soonestEnd(g WantedGame) time.Time {
 }
 
 func newWantedCampaign(c *Campaign, drops []WantedDrop) WantedCampaign {
-	return WantedCampaign{ID: c.ID, Name: c.Name, URL: c.URL(), Drops: drops, ends: c.EndsAt}
+	return WantedCampaign{ID: c.ID, Name: c.Name, URL: c.URL(), Drops: drops, RemainingMinutes: c.RemainingMinutes(), ends: c.EndsAt}
+}
+
+func (g *WantedGame) sumRemaining() {
+	g.RemainingMinutes = 0
+	for _, c := range g.Campaigns {
+		g.RemainingMinutes += c.RemainingMinutes
+	}
 }
 
 // wantedTreeLocked builds the mining queue: listed games in priority order,
@@ -89,7 +105,9 @@ func (m *Miner) wantedTreeLocked() []WantedGame {
 			continue
 		}
 		queued[game.ID] = true
-		out = append(out, WantedGame{GameID: game.ID, GameName: game.Name, GameIcon: game.BoxArtURL, Campaigns: campaigns, game: game})
+		g := WantedGame{GameID: game.ID, GameName: game.Name, GameIcon: game.BoxArtURL, Campaigns: campaigns, game: game}
+		g.sumRemaining()
+		out = append(out, g)
 	}
 	if m.policy.endingSoonest {
 		// Mine whatever runs out first; list order breaks ties.
@@ -121,6 +139,7 @@ func (m *Miner) wantedTreeLocked() []WantedGame {
 	for _, id := range order {
 		g := fallback[id]
 		slices.SortStableFunc(g.Campaigns, func(a, b WantedCampaign) int { return a.ends.Compare(b.ends) })
+		g.sumRemaining()
 		games = append(games, g)
 	}
 	slices.SortStableFunc(games, func(a, b *WantedGame) int {

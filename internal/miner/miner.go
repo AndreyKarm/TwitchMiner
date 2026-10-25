@@ -52,6 +52,7 @@ type policy struct {
 	keywords       []string
 	keywordKey     string
 	allowUnlinked  bool
+	skipLate       bool
 	refreshMinutes int
 	checkMinutes   int
 }
@@ -65,6 +66,7 @@ func newPolicy(s config.Settings) policy {
 		keywords:       s.DropNameBlacklist,
 		keywordKey:     strings.ToLower(strings.Join(s.DropNameBlacklist, "\x00")) + "\x01",
 		allowUnlinked:  s.AllowUnlinkedCampaigns,
+		skipLate:       s.SkipUnfinishableDrops,
 		refreshMinutes: s.RefreshIntervalMinutes,
 		checkMinutes:   s.CampaignCheckMinutes,
 	}
@@ -79,7 +81,8 @@ func (p policy) sameMining(o policy) bool {
 		p.endingSoonest == o.endingSoonest &&
 		maps.Equal(p.benefits, o.benefits) &&
 		p.keywordKey == o.keywordKey &&
-		p.allowUnlinked == o.allowUnlinked
+		p.allowUnlinked == o.allowUnlinked &&
+		p.skipLate == o.skipLate
 }
 
 // gamesAdded reports whether next lists a game that prev doesn't.
@@ -160,6 +163,8 @@ type Miner struct {
 	selectedID         string
 	manualChannel      *Channel
 	manualGame         *Game
+	bansNoted          map[string]time.Time // channel ID to the ban end already reported
+	lateWarned         map[string]bool      // drops already reported as unable to finish
 	triggers           []time.Time
 	progress           *progressState
 	dirty              dirtyFlags
@@ -533,6 +538,7 @@ func (m *Miner) stateLoop(ctx context.Context) {
 			m.mu.Lock()
 			m.gamesUpdatePending = false
 			m.updateWantedLocked()
+			m.warnLateLocked()
 			alerts, seen := m.collectStartedLocked()
 			fullCleanup = true
 			m.restartWatchingLocked()
@@ -659,6 +665,41 @@ func (m *Miner) updateWantedLocked() {
 	m.dirty |= dirtyInventory | dirtyWanted
 }
 
+// warnLateLocked reports, once each, the drops the miner would mine that
+// can no longer be finished before they end.
+func (m *Miner) warnLateLocked() {
+	now := time.Now()
+	for _, c := range m.inventory {
+		if !c.Eligible() || c.Expired() || m.policy.priorityOnly && !m.isListedGame(c.Game) {
+			continue
+		}
+		late := c.lateDrops(now)
+		for _, d := range c.watchDrops() {
+			if !late[d.ID] || m.lateWarned[d.ID] || !d.wantsBenefit(m.policy.benefits) {
+				continue
+			}
+			r := d.IgnoreReason()
+			skipped := r != nil && r.Kind == "too_late"
+			if !skipped && !d.IsMineable() {
+				continue // ignored for another reason
+			}
+			if m.lateWarned == nil {
+				m.lateWarned = map[string]bool{}
+			}
+			m.lateWarned[d.ID] = true
+			text := fmt.Sprintf("%s: %s can't be finished before it ends (needs %s of watching, %s left)",
+				c.Game.Name, d.label(), roughDuration(time.Duration(d.TotalRemainingMinutes())*time.Minute),
+				roughDuration(time.Duration(d.minutesLeft(now))*time.Minute))
+			if skipped {
+				text += ", so it's skipped."
+			} else {
+				text += ". Mining it anyway; Settings can skip drops like this."
+			}
+			m.print(text)
+		}
+	}
+}
+
 func (m *Miner) cleanupChannelsLocked(full bool) {
 	var remove []*Channel
 	for _, id := range m.channelOrder {
@@ -748,6 +789,15 @@ func (m *Miner) fetchChannels(ctx context.Context) {
 		}
 		directory = append(directory, chs...)
 	}
+	var added []*Channel
+	addedSeen := map[string]bool{}
+	for _, ch := range append(aclNew, directory...) {
+		if known[ch.ID] == nil && !addedSeen[ch.ID] {
+			addedSeen[ch.ID] = true
+			added = append(added, ch)
+		}
+	}
+	m.fillBans(ctx, added)
 	if ctx.Err() != nil {
 		return
 	}
@@ -755,9 +805,11 @@ func (m *Miner) fetchChannels(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	merged := known
-	for _, ch := range append(aclNew, directory...) {
-		if merged[ch.ID] == nil {
-			merged[ch.ID] = ch
+	now := time.Now()
+	for _, ch := range added {
+		merged[ch.ID] = ch
+		if ch.Banned(now) {
+			m.banFoundLocked(ch)
 		}
 	}
 	ordered := make([]*Channel, 0, len(merged))
@@ -915,10 +967,10 @@ func (m *Miner) wantedIndexLocked(g *Game) int {
 	return slices.IndexFunc(m.wanted, func(w *Game) bool { return w.ID == g.ID })
 }
 
-// canWatchLocked reports whether ch is online and progresses a campaign of
-// a wanted game.
+// canWatchLocked reports whether ch is online, hasn't banned the viewer and
+// progresses a campaign of a wanted game.
 func (m *Miner) canWatchLocked(ch *Channel) bool {
-	if m.paused || len(m.wanted) == 0 || !ch.Online() {
+	if m.paused || len(m.wanted) == 0 || !ch.Online() || ch.Banned(time.Now()) {
 		return false
 	}
 	for _, c := range m.inventory {
