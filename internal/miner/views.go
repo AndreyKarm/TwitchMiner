@@ -203,6 +203,10 @@ func (m *Miner) campaignViewsLocked() []CampaignView {
 	out := []CampaignView{}
 	now := time.Now()
 	for _, c := range m.inventory {
+		// Twitch keeps ended campaigns in the inventory for weeks.
+		if c.Expired() && now.Sub(c.EndsAt) >= m.policy.expiredShownFor {
+			continue
+		}
 		v := CampaignView{
 			ID:         c.ID,
 			Name:       c.Name,

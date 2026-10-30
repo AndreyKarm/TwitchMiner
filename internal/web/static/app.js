@@ -673,6 +673,7 @@ function renderSettings(force = false) {
 	setField('#blacklist', s.drop_name_blacklist.join('\n'));
 	setField('#refresh', s.minimum_refresh_interval_minutes);
 	setField('#campaign-check', s.campaign_check_minutes);
+	setField('#hide-expired', s.hide_expired_after_hours);
 	setField('#quality', s.connection_quality);
 	setField('#proxy', s.proxy);
 	setField('#telegram-chat', s.telegram_chat_id);
@@ -867,9 +868,14 @@ $('#connection-save').addEventListener('click', () => {
 	if (!Number.isInteger(check) || check < 1 || check > 1440) {
 		return toast('The campaign check interval must be a whole number of minutes between 1 and 1440.', true);
 	}
+	const hideExpired = Number($('#hide-expired').value);
+	if (!Number.isInteger(hideExpired) || hideExpired < 0 || hideExpired > 2160) {
+		return toast('Hiding ended campaigns must be a whole number of hours between 0 and 2160.', true);
+	}
 	saveSettings({
 		minimum_refresh_interval_minutes: refresh,
 		campaign_check_minutes: check,
+		hide_expired_after_hours: hideExpired,
 		connection_quality: Number($('#quality').value),
 		proxy: $('#proxy').value.trim(),
 	}, 'Connection settings saved');

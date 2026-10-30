@@ -53,6 +53,9 @@ type Settings struct {
 	// CampaignCheckMinutes is how often to look for new campaigns while a
 	// listed game has nothing to mine and Twitch hides its campaign list.
 	CampaignCheckMinutes int `json:"campaign_check_minutes"`
+	// HideExpiredAfterHours is how long an ended campaign stays in the
+	// dashboard's inventory; 0 hides it as soon as it ends.
+	HideExpiredAfterHours int `json:"hide_expired_after_hours"`
 	// Proxy is an optional http(s) or socks5 proxy URL.
 	Proxy string `json:"proxy"`
 	// PriorityEndingSoonest orders the listed games by their soonest-ending
@@ -115,6 +118,7 @@ func Defaults() Settings {
 		ConnectionQuality:      1,
 		RefreshIntervalMinutes: 30,
 		CampaignCheckMinutes:   5,
+		HideExpiredAfterHours:  24,
 	}
 }
 
@@ -155,6 +159,7 @@ func (s *Settings) Normalize() error {
 	s.ConnectionQuality = min(max(s.ConnectionQuality, 1), 6)
 	s.RefreshIntervalMinutes = min(max(s.RefreshIntervalMinutes, 5), 24*60)
 	s.CampaignCheckMinutes = min(max(s.CampaignCheckMinutes, 1), 24*60)
+	s.HideExpiredAfterHours = min(max(s.HideExpiredAfterHours, 0), 90*24)
 	s.Proxy = strings.TrimSpace(s.Proxy)
 	if s.Proxy != "" {
 		u, err := url.Parse(s.Proxy)

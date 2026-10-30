@@ -116,9 +116,11 @@ offered by its channels, so it won't be found again.
   - **Only mine games on this list**: turn it off to mine other eligible games once
     the listed ones run out.
 - **Inventory** lists campaigns with their drops, progress and account-link status.
+  A campaign that has ended drops off the list after a delay you set in Settings
+  (24 hours by default; 0 hides it as soon as it ends).
 - **Settings** chooses which reward types count, ignores drops by name, sets how
-  often to reload the inventory and look for new campaigns, sets campaign alerts, and
-  sets a proxy.
+  often to reload the inventory and look for new campaigns, how long ended campaigns
+  stay in Inventory, sets campaign alerts, and sets a proxy.
   - A drop that needs more watching than the time left before it ends is marked
     **won't finish** in the queue and Inventory, and the console says so once.
     Turn on **Skip drops that can't finish in time** to skip such drops and mine

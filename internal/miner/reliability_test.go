@@ -23,8 +23,9 @@ func TestOnlyMiningSettingsRestartMining(t *testing.T) {
 	same.Proxy = "http://proxy:8080"
 	same.RefreshIntervalMinutes = 60
 	same.CampaignCheckMinutes = 15
+	same.HideExpiredAfterHours = 1
 	if !p.sameMining(newPolicy(same)) {
-		t.Error("alert, proxy and reload-interval changes must not restart mining")
+		t.Error("alert, proxy, reload-interval and inventory display changes must not restart mining")
 	}
 
 	for name, change := range map[string]func(*config.Settings){

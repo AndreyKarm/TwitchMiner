@@ -55,20 +55,23 @@ type policy struct {
 	skipLate       bool
 	refreshMinutes int
 	checkMinutes   int
+	// expiredShownFor is how long an ended campaign stays on the dashboard.
+	expiredShownFor time.Duration
 }
 
 func newPolicy(s config.Settings) policy {
 	return policy{
-		games:          s.GamesToWatch,
-		priorityOnly:   s.PriorityListOnly,
-		endingSoonest:  s.PriorityEndingSoonest,
-		benefits:       s.MiningBenefits,
-		keywords:       s.DropNameBlacklist,
-		keywordKey:     strings.ToLower(strings.Join(s.DropNameBlacklist, "\x00")) + "\x01",
-		allowUnlinked:  s.AllowUnlinkedCampaigns,
-		skipLate:       s.SkipUnfinishableDrops,
-		refreshMinutes: s.RefreshIntervalMinutes,
-		checkMinutes:   s.CampaignCheckMinutes,
+		games:           s.GamesToWatch,
+		priorityOnly:    s.PriorityListOnly,
+		endingSoonest:   s.PriorityEndingSoonest,
+		benefits:        s.MiningBenefits,
+		keywords:        s.DropNameBlacklist,
+		keywordKey:      strings.ToLower(strings.Join(s.DropNameBlacklist, "\x00")) + "\x01",
+		allowUnlinked:   s.AllowUnlinkedCampaigns,
+		skipLate:        s.SkipUnfinishableDrops,
+		refreshMinutes:  s.RefreshIntervalMinutes,
+		checkMinutes:    s.CampaignCheckMinutes,
+		expiredShownFor: time.Duration(s.HideExpiredAfterHours) * time.Hour,
 	}
 }
 
@@ -382,6 +385,9 @@ func (m *Miner) SettingsChanged(s config.Settings) {
 	if miningChanged {
 		m.dirty |= dirtyInventory | dirtyWanted
 		m.requestGamesUpdateLocked()
+	}
+	if next.expiredShownFor != old.expiredShownFor {
+		m.dirty |= dirtyInventory
 	}
 	// Without Twitch's campaign list, a newly listed game's campaigns are
 	// only found by searching its channels, so search now rather than at the
