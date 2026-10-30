@@ -1,0 +1,23 @@
+# Runs the published image instead of building from source. Copy this file into
+# an empty folder as compose.yaml, or use it from the repository with -f:
+#
+# Start the miner:               docker compose -f compose.image.yaml up -d
+# Update to the latest release:  docker compose -f compose.image.yaml pull
+#                                docker compose -f compose.image.yaml up -d
+# Follow the logs:               docker compose -f compose.image.yaml logs -f
+# Stop it:                       docker compose -f compose.image.yaml down
+#
+# Set TWITCHMINER_TAG to pin a release, for example TWITCHMINER_TAG=0.2.0, and
+# TWITCHMINER_PORT to use another host port when 8080 is taken.
+services:
+  twitchdropsminer:
+    image: ghcr.io/andreykarm/twitchminer:${TWITCHMINER_TAG:-latest}
+    container_name: twitchdropsminer
+    ports:
+      - "${TWITCHMINER_PORT:-8080}:8080"
+    volumes:
+      # Settings and the Twitch login token. Keep this folder private, and
+      # don't run a second miner against the same folder.
+      - ${TWITCHMINER_DATA_DIR:-./data}:/data
+    restart: unless-stopped
+    stop_grace_period: 15s

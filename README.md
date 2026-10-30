@@ -174,17 +174,57 @@ login alert.
 
 ## Docker
 
-Build and start it with Docker Compose:
+Each release publishes a multi-arch image (amd64 and arm64) to GitHub's container
+registry:
+
+```bash
+docker pull ghcr.io/andreykarm/twitchminer:latest
+```
+
+To run it with Docker Compose, save this as `compose.yaml` in an empty folder (it's
+also in the repository as [`compose.image.yaml`](compose.image.yaml)):
+
+```yaml
+services:
+  twitchdropsminer:
+    image: ghcr.io/andreykarm/twitchminer:latest
+    container_name: twitchdropsminer
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    stop_grace_period: 15s
+```
+
+Then start it, and later update it to the newest release:
+
+```bash
+docker compose up -d
+docker compose pull && docker compose up -d
+```
+
+Or without Compose:
+
+```bash
+docker run -d --name twitchdropsminer -p 8080:8080 -v ./data:/data --restart unless-stopped ghcr.io/andreykarm/twitchminer:latest
+```
+
+To pin a release, use its version as the tag, for example
+`ghcr.io/andreykarm/twitchminer:0.2.0`. `latest` follows the newest release.
+
+To build the image from source instead, use the repository's `compose.yaml`:
 
 ```bash
 docker compose up -d --build
 ```
 
 The dashboard is at <http://localhost:8080>, and settings and the login are kept in
-`./data`. To use another host port, set `TWITCHMINER_PORT`, for example
-`TWITCHMINER_PORT=8091 docker compose up -d --build`. To use another data folder, set
-`TWITCHMINER_DATA_DIR`. Run `docker compose logs -f` to follow the log and
-`docker compose down` to stop it.
+`./data`. Both compose files read `TWITCHMINER_PORT` for another host port, for
+example `TWITCHMINER_PORT=8091 docker compose up -d`, and `TWITCHMINER_DATA_DIR` for
+another data folder; `compose.image.yaml` also reads `TWITCHMINER_TAG` to pin a
+release. Run `docker compose logs -f` to follow the log and `docker compose down` to
+stop it.
 
 Don't run a second miner, such as `go run`, against the same data folder at the same
 time; both would mine on the same account.
@@ -238,8 +278,8 @@ The [release workflow](.github/workflows/release.yml) then:
 1. Runs the tests on Linux and Windows.
 2. Builds Windows, Linux and macOS binaries for amd64 and arm64 and attaches them to
    a GitHub release with checksums.
-3. Pushes a multi-arch Docker image to `ghcr.io/<owner>/<repo>`, tagged with the
-   version and `latest`.
+3. Pushes a multi-arch Docker image to `ghcr.io/andreykarm/twitchminer`, tagged with
+   the version and `latest`.
 
 ## Not ported yet
 
